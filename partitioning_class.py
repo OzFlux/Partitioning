@@ -24,6 +24,7 @@ import utils
 class partition(object):
     """
     Class for fitting of respiration parameters and estimation of respiration
+    WARNING - NO FILTERING OR DATA INTEGRITY CHECKS APPLIED HERE!!!
     
     Args:
         * dataframe (pd.dataframe): containing a minimum of temperature, solar 
@@ -189,7 +190,8 @@ class partition(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_gpp_time_series(self, params_df = False):
+    def estimate_gpp_time_series(self, params_df = False, 
+                                 by_subtraction = False):
         
         if not isinstance(params_df, pd.core.frame.DataFrame):
             params_df = self.estimate_parameters(mode = 'day')
@@ -204,11 +206,13 @@ class partition(object):
                                             alpha = params.alpha,
                                             beta = params.beta,
                                             k = params.k))
+        
         return gpp_series
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_nee_time_series(self, params_df = False):
+    def estimate_nee_time_series(self, params_df = False, 
+                                 splice_with_obs = False):
         return (self.estimate_gpp_time_series(params_df) + 
                 self.estimate_er_time_series(params_df))
     #--------------------------------------------------------------------------
