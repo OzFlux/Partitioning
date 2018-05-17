@@ -237,12 +237,17 @@ class partition(object):
             except RuntimeError, e:
                 print '- {}'.format(e)
                 continue
+        full_date_list = np.unique(self.df.index.date)
+        flag = pd.Series(0, index = date_list, name = 'Fill_flag')
+        flag = flag.reindex(pd.date_range(full_date_list[0], full_date_list[-1], 
+                                          freq='D'))
+        flag.fillna(1, inplace = True)
         out_df = pd.DataFrame(result_list, index = date_list)
         out_df = out_df.resample('D').interpolate()
         out_df = out_df.reindex(np.unique(self.df.index.date))
         out_df.fillna(method = 'bfill', inplace = True)
         out_df.fillna(method = 'ffill', inplace = True)
-        return out_df
+        return out_df.join(flag)
     #--------------------------------------------------------------------------
     
     #--------------------------------------------------------------------------
