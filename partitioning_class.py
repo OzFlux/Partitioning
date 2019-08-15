@@ -168,7 +168,7 @@ class partition(object):
             Eo_list.append([result.params['Eo'].value, se])
         if len(Eo_list) == 0: raise RuntimeError('Could not find any valid '
                                                  'estimates of Eo! Exiting...')
-        print(('Found {} valid estimates of Eo'.format(str(len(Eo_list)))))
+        print('Found {} valid estimates of Eo'.format(str(len(Eo_list))))
         Eo_array = np.array(Eo_list)
         Eo = ((Eo_array[:, 0] / (Eo_array[:, 1])).sum() / 
               (1 / Eo_array[:, 1]).sum())
@@ -233,7 +233,7 @@ class partition(object):
         func = self._get_func()[mode]
         if not Eo: Eo = self.estimate_Eo()
         result_list, date_list = [], []
-        print(('Processing the following dates ({} mode): '.format(mode)))
+        print('Processing the following dates ({} mode): '.format(mode))
         for date in self.make_date_iterator(window_size, window_step):
             print((date.date()), end=' ')
             try:
@@ -241,7 +241,7 @@ class partition(object):
                 date_list.append(date)
                 print ()
             except RuntimeError as e:
-                print(('- {}'.format(e)))
+                print('- {}'.format(e))
                 continue
         full_date_list = np.unique(self.df.index.date)
         flag = pd.Series(0, index = date_list, name = 'Fill_flag')
@@ -332,16 +332,16 @@ class partition(object):
                     self.nocturnal_params(date, Eo, window_size,
                                           self.prior_parameter_estimates()))['rb']
         except RuntimeError as e:
-            print(('Fit of nocturnal rb failed with the following message {}'
-                   .format(e)))
+            print('Fit of nocturnal rb failed with the following message {}'
+                  .format(e))
         try:
             self._fit_daytime_rb = True            
             results_dict['day'] = (
                     self.day_params(date, Eo, window_size, 
                                     self.prior_parameter_estimates()))['rb']
         except RuntimeError as e:
-            print(('Fit of daytime rb failed with the following message {}'
-                   .format(e)))
+            print('Fit of daytime rb failed with the following message {}'
+                  .format(e))
         fig, ax = plt.subplots(1, 1, figsize = (14, 8))
         fig.patch.set_facecolor('white')
         ax.axhline(0, color = 'black')
@@ -379,15 +379,15 @@ class partition(object):
             results_dict['night'] = (self.day_params(date, Eo, window_size,
                                      self.prior_parameter_estimates()))
         except RuntimeError as e:
-            print(('Fit of daytime parameters and nocturnal rb failed with '
-                   'the following message {}'.format(e)))
+            print('Fit of daytime parameters and nocturnal rb failed with '
+                  'the following message {}'.format(e))
         try:
             self._fit_daytime_rb = True            
             results_dict['day'] = (self.day_params(date, Eo, window_size, 
                                    self.prior_parameter_estimates()))
         except RuntimeError as e:
-            print(('Fit of daytime parameters and rb failed with the '
-                   'following message {}'.format(e)))
+            print('Fit of daytime parameters and rb failed with the '
+                  'following message {}'.format(e))
         fig, ax = plt.subplots(1, 1, figsize = (14, 8))
         fig.patch.set_facecolor('white')
         ax.axhline(0, color = 'black')
