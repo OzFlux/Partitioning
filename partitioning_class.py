@@ -44,11 +44,8 @@ class partition(object):
     def __init__(self, dataframe, names_dict = None, weighting = 'air',
                  noct_threshold = 10, convert_to_photons = True):
 
-        try:
-            interval = int(''.join([x for x in pd.infer_freq(dataframe.index) 
-                                    if x.isdigit()]))
-        except TypeError:
-            pdb.set_trace()
+        interval = int(''.join([x for x in pd.infer_freq(dataframe.index) 
+                                if x.isdigit()]))
         assert interval % 30 == 0
         self.interval = interval 
         if not names_dict: 
