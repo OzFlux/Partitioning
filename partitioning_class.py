@@ -14,10 +14,7 @@ import operator
 import pandas as pd
 import pdb
 
-import importlib
 import utils
-importlib.reload(utils)
-
 
 #------------------------------------------------------------------------------
 # Init
@@ -396,8 +393,7 @@ class partition(object):
         ax.spines['top'].set_visible(False)
         ax.tick_params(axis = 'y', labelsize = 14)
         ax.tick_params(axis = 'x', labelsize = 14)
-        ax.set_title(dt.datetime.strftime(date.to_pydatetime(), '%Y-%m-%d'),
-                     fontsize = 18)
+        ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
         ax.set_xlabel('$PPFD\/(\mu mol\/photons\/m^{-2}\/s^{-1})$', 
                       fontsize = 18)
         ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
