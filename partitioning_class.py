@@ -14,7 +14,10 @@ import operator
 import pandas as pd
 import pdb
 
+import importlib
 import utils
+importlib.reload(utils)
+
 
 #------------------------------------------------------------------------------
 # Init
@@ -44,8 +47,11 @@ class partition(object):
     def __init__(self, dataframe, names_dict = None, weighting = 'air',
                  noct_threshold = 10, convert_to_photons = True):
 
-        interval = int(filter(lambda x: x.isdigit(), 
-                              pd.infer_freq(dataframe.index)))
+        try:
+            interval = int(''.join([x for x in pd.infer_freq(dataframe.index) 
+                                    if x.isdigit()]))
+        except TypeError:
+            pdb.set_trace()
         assert interval % 30 == 0
         self.interval = interval 
         if not names_dict: 
@@ -162,7 +168,7 @@ class partition(object):
             Eo_list.append([result.params['Eo'].value, se])
         if len(Eo_list) == 0: raise RuntimeError('Could not find any valid '
                                                  'estimates of Eo! Exiting...')
-        print ('Found {} valid estimates of Eo'.format(str(len(Eo_list))))
+        print(('Found {} valid estimates of Eo'.format(str(len(Eo_list)))))
         Eo_array = np.array(Eo_list)
         Eo = ((Eo_array[:, 0] / (Eo_array[:, 1])).sum() / 
               (1 / Eo_array[:, 1]).sum())
@@ -227,15 +233,15 @@ class partition(object):
         func = self._get_func()[mode]
         if not Eo: Eo = self.estimate_Eo()
         result_list, date_list = [], []
-        print ('Processing the following dates ({} mode): '.format(mode))
+        print(('Processing the following dates ({} mode): '.format(mode)))
         for date in self.make_date_iterator(window_size, window_step):
-            print (date.date()),
+            print((date.date()), end=' ')
             try:
                 result_list.append(func(date, Eo, window_size, priors_dict))
                 date_list.append(date)
                 print ()
             except RuntimeError as e:
-                print ('- {}'.format(e))
+                print(('- {}'.format(e)))
                 continue
         full_date_list = np.unique(self.df.index.date)
         flag = pd.Series(0, index = date_list, name = 'Fill_flag')
@@ -326,16 +332,16 @@ class partition(object):
                     self.nocturnal_params(date, Eo, window_size,
                                           self.prior_parameter_estimates()))['rb']
         except RuntimeError as e:
-            print ('Fit of nocturnal rb failed with the following message {}'
-                   .format(e))
+            print(('Fit of nocturnal rb failed with the following message {}'
+                   .format(e)))
         try:
             self._fit_daytime_rb = True            
             results_dict['day'] = (
                     self.day_params(date, Eo, window_size, 
                                     self.prior_parameter_estimates()))['rb']
         except RuntimeError as e:
-            print ('Fit of daytime rb failed with the following message {}'
-                   .format(e))
+            print(('Fit of daytime rb failed with the following message {}'
+                   .format(e)))
         fig, ax = plt.subplots(1, 1, figsize = (14, 8))
         fig.patch.set_facecolor('white')
         ax.axhline(0, color = 'black')
@@ -343,8 +349,7 @@ class partition(object):
         ax.spines['top'].set_visible(False)
         ax.tick_params(axis = 'y', labelsize = 14)
         ax.tick_params(axis = 'x', labelsize = 14)
-        ax.set_title(dt.datetime.strftime(date.to_pydatetime(), '%Y-%m-%d'),
-                     fontsize = 18)
+        ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
         ax.set_xlabel('$Temperature\/(^oC)$', fontsize = 18)
         ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
         labels_dict = {'night': 'Night Eo and rb', 'day': 'Night Eo, day rb'}
@@ -353,7 +358,7 @@ class partition(object):
                 mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
                 label = 'Observations')
         df['TC_alt'] = np.linspace(df.TC.min(), df.TC.max(), len(df))
-        for key in results_dict.keys():
+        for key in list(results_dict.keys()):
             s = _Lloyd_and_Taylor(t_series = df.TC_alt, rb = results_dict[key],
                                   Eo = Eo)
             ax.plot(df.TC_alt, s, color = 'black', ls = styles_dict[key], 
@@ -374,15 +379,15 @@ class partition(object):
             results_dict['night'] = (self.day_params(date, Eo, window_size,
                                      self.prior_parameter_estimates()))
         except RuntimeError as e:
-            print ('Fit of daytime parameters and nocturnal rb failed with '
-                   'the following message {}'.format(e))
+            print(('Fit of daytime parameters and nocturnal rb failed with '
+                   'the following message {}'.format(e)))
         try:
             self._fit_daytime_rb = True            
             results_dict['day'] = (self.day_params(date, Eo, window_size, 
                                    self.prior_parameter_estimates()))
         except RuntimeError as e:
-            print ('Fit of daytime parameters and rb failed with the '
-                   'following message {}'.format(e))
+            print(('Fit of daytime parameters and rb failed with the '
+                   'following message {}'.format(e)))
         fig, ax = plt.subplots(1, 1, figsize = (14, 8))
         fig.patch.set_facecolor('white')
         ax.axhline(0, color = 'black')
@@ -402,7 +407,7 @@ class partition(object):
         ax.plot(df.PPFD, df.NEE, color = 'None', marker = 'o', 
                 mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
                 label = 'Observations')
-        for key in results_dict.keys():
+        for key in list(results_dict.keys()):
             params = results_dict[key]
             s = _NEE_model(par_series=df.PPFD, vpd_series=df.VPD, 
                            t_series=df.TC, rb = params['rb'], 
