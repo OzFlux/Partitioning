@@ -14,8 +14,6 @@ import operator
 import pandas as pd
 import pdb
 
-import utils
-
 #------------------------------------------------------------------------------
 # Init
 #------------------------------------------------------------------------------
@@ -25,23 +23,24 @@ class partition(object):
     """
     Class for fitting of respiration parameters and estimation of respiration
     WARNING - NO FILTERING OR DATA INTEGRITY CHECKS APPLIED HERE!!!
+    To do - add separate method for integrity checks on user-supplied args
     
     Args:
         * dataframe (pd.dataframe): containing a minimum of temperature, solar 
-          radiation and CO2 flux.
+          radiation, VPD and CO2 flux.
     Kwargs:
         * names_dict (dict): maps the variable names used in the dataset to 
           common names (keys must be 'air_temperature', 'soil_temperature', 
           'insolation', 'Cflux'); if None, defaults to the internal 
           specification, which works for PyFluxPro.
-        * weighting (str, int or float): if str, must be either 'air' or 'soil',
-          which determines which temperature series is used for the fit; if 
-          int or float is supplied, the number is used as a ratio for weighting
-          the air and soil series - note that the ratio is air: soil, such that
-          e.g. choice of 3 would cause weighting of 3:1 in favour of air 
-          temperature, or e.g. float(1/3) would result in the reverse.
+        * weights (str, or list of ints / floats): if str, must be either 
+          'air' or 'soil', which determines which temperature series is used 
+          for the fit; if list is supplied, it must have two numbers (ints or 
+          floats), which are used for the weighting in the ratio air:soil 
+          e.g. choice of [3, 1] would cause weighting of 3:1 in favour of air 
+          temperature, or e.g. [1, 3] would result in the reverse.
     """
-    def __init__(self, dataframe, names_dict = None, weighting = 'air',
+    def __init__(self, dataframe, names_dict = None, weights_air_soil = 'air',
                  noct_threshold = 10, convert_to_photons = True):
 
         interval = int(filter(lambda x: x.isdigit(), 
@@ -54,7 +53,7 @@ class partition(object):
             self.external_names = names_dict
         self.internal_names = self._define_default_internal_names()
         self.convert_to_photons = convert_to_photons
-        self.weighting = weighting
+        self.weighting = _check_weights_format(weights_air_soil)
         self.df = self._make_formatted_df(dataframe)
         if convert_to_photons:
             self.noct_threshold = noct_threshold * 0.46 * 4.6
@@ -121,6 +120,8 @@ class partition(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
+    """Defines the internal names used by the algorithm"""
+    
     def _define_default_internal_names(self):
 
         return {'Cflux': 'NEE',
@@ -131,6 +132,8 @@ class partition(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
+    """"""
+    
     def _define_default_external_names(self):
 
         return {'Cflux': 'Fc',
@@ -139,9 +142,12 @@ class partition(object):
                 'insolation': 'Fsd',
                 'vapour_pressure_deficit': 'VPD'}
     #--------------------------------------------------------------------------
-    
+
     #--------------------------------------------------------------------------
-    def estimate_Eo(self, window_size = 15, window_step = 5):
+    def estimate_Eo(self, window_size = 15, window_step = 5, get_stats = False):
+        
+        """Estimate the activation energy type parameter for the L&T Arrhenius
+           style equation using nocturnal data"""
         
         Eo_list = []
         for date in self.make_date_iterator(window_size, window_step):
@@ -282,16 +288,16 @@ class partition(object):
     #--------------------------------------------------------------------------
     def _make_formatted_df(self, df):
         
-        sub_df = utils.rename_df(df, self.external_names,
-                                 self.internal_names)
+        """Update this to check for soil temperature - if not there, default
+           to Ta"""
+        
+        sub_df = _rename_df(df, self.external_names, self.internal_names)
         if self.convert_to_photons: sub_df['PPFD'] = sub_df['PPFD'] * 0.46 * 4.6
-        if self.weighting == 'air':
-            s = sub_df['Ta'].copy()
-        elif self.weighting == 'soil':
-            s = sub_df['Ts'].copy()
-        elif isinstance(self.weighting, (int, float)):
-            s = ((sub_df['Ta'] * self.weighting + sub_df['Ts']) / 
-                 (self.weighting + 1))
+        if self.weighting == 'air': s = sub_df['Ta'].copy()
+        if self.weighting == 'soil': s = sub_df['Ts'].copy()
+        if isinstance(self.weighting, list):
+            s = (sub_df['Ta'] * self.weighting[0] + 
+                 sub_df['Ts'] * self.weighting[1]) / sum(self.weighting)
         s.name = 'TC'
         return sub_df.join(s)
     #--------------------------------------------------------------------------
@@ -430,12 +436,42 @@ class partition(object):
     #--------------------------------------------------------------------------    
     
 #------------------------------------------------------------------------------
+def _check_weights_format(weighting):
+    
+    try:
+        assert isinstance(weighting, (str, list))
+    except AssertionError:
+        raise TypeError('"weighting" kwarg must be either string or list')
+    try:    
+        if isinstance(weighting, str):
+            assert weighting in ['air', 'soil']
+            return weighting
+    except AssertionError:
+        raise TypeError('if str passed for "weighting" kwarg, it must '
+                           'be either "air" or "soil"')
+    try:
+        if isinstance(weighting, list):
+            assert len(weighting) == 2
+            for x in weighting:
+                assert isinstance(x, (int, float))
+            return weighting
+    except AssertionError:
+        raise TypeError('if list passed for weighting kwarg, it must '
+                        'conists of only 2 elements, each of which must '
+                        'be of type int or float')
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+"""Arrhenius style equation as used in Lloyd and Taylor 1994"""
+
 def _Lloyd_and_Taylor(t_series, rb, Eo):
 
     return rb  * np.exp(Eo * (1 / (10 + 46.02) - 1 / (t_series + 46.02)))
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+"""Rectangular hyperbola as used in Lasslop et al 2010"""
+
 def _rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
     
     beta_VPD = beta * np.exp(-k * (vpd_series - 1))
@@ -449,8 +485,23 @@ def _rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------    
+"""Complete model containing both temperature and ligh response functions"""
+
 def _NEE_model(par_series, vpd_series, t_series, rb, Eo, alpha, beta, k):
     
     return (_rectangular_hyperbola(par_series, vpd_series, alpha, beta, k) + 
             _Lloyd_and_Taylor(t_series, rb, Eo))
+#------------------------------------------------------------------------------
+    
+#------------------------------------------------------------------------------
+"""Convert external names to internal names"""
+
+def _rename_df(df, external_names, internal_names):
+    
+    assert sorted(external_names.keys()) == sorted(internal_names.keys())
+    swap_dict = {external_names[key]: internal_names[key] 
+                 for key in internal_names.keys()}
+    sub_df = df[swap_dict.keys()].copy()
+    sub_df.columns = swap_dict.values()
+    return sub_df    
 #------------------------------------------------------------------------------
