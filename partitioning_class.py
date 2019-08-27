@@ -196,11 +196,10 @@ class partition(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_gpp_time_series(self, params_df = False, 
-                                 by_subtraction = False):
+    def estimate_gpp_time_series(self, params_df = False):
         
         if not isinstance(params_df, pd.core.frame.DataFrame):
-            params_df = self.estimate_parameters(mode = 'day')
+            params_df = self.estimate_parameters(mode = 'day', fit_daytime_rb)
         gpp_series = pd.Series()
         for date in params_df.index:
             params = params_df.loc[date]
