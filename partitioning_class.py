@@ -40,8 +40,9 @@ class partition(object):
           e.g. choice of [3, 1] would cause weighting of 3:1 in favour of air 
           temperature, or e.g. [1, 3] would result in the reverse.
     """
-    def __init__(self, dataframe, names_dict = None, weights_air_soil = 'air',
-                 noct_threshold = 10, convert_to_photons = True):
+    def __init__(self, dataframe, names_dict = None, fit_daytime_rb = False, 
+                 weights_air_soil = 'air', noct_threshold = 10, 
+                 convert_to_photons = True):
 
         interval = int(filter(lambda x: x.isdigit(), 
                               pd.infer_freq(dataframe.index)))
@@ -59,7 +60,7 @@ class partition(object):
             self.noct_threshold = noct_threshold * 0.46 * 4.6
         else:
             self.noct_threshold = noct_threshold
-        self._fit_daytime_rb = False
+        self._fit_daytime_rb = fit_daytime_rb
 #------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -132,7 +133,8 @@ class partition(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    """"""
+    """Maps the variable names in the external dataset to generic variable
+       references"""
     
     def _define_default_external_names(self):
 
@@ -199,7 +201,7 @@ class partition(object):
     def estimate_gpp_time_series(self, params_df = False):
         
         if not isinstance(params_df, pd.core.frame.DataFrame):
-            params_df = self.estimate_parameters(mode = 'day', fit_daytime_rb)
+            params_df = self.estimate_parameters(mode = 'day')
         gpp_series = pd.Series()
         for date in params_df.index:
             params = params_df.loc[date]
@@ -214,7 +216,7 @@ class partition(object):
         
         return gpp_series
     #--------------------------------------------------------------------------
-
+    
     #--------------------------------------------------------------------------
     def estimate_nee_time_series(self, params_df = False, 
                                  splice_with_obs = False):
@@ -224,10 +226,8 @@ class partition(object):
     
     #--------------------------------------------------------------------------
     def estimate_parameters(self, mode, Eo = None, window_size = 4, 
-                            window_step = 4, fit_daytime_rb = False):
+                            window_step = 4):
         
-        assert isinstance(fit_daytime_rb, bool)
-        self._fit_daytime_rb = fit_daytime_rb
         priors_dict = self.prior_parameter_estimates()
         func = self._get_func()[mode]
         if not Eo: Eo = self.estimate_Eo()
@@ -322,6 +322,7 @@ class partition(object):
     #--------------------------------------------------------------------------
     def plot_er(self, date, window_size = 15, Eo = None):
 
+        state = self._fit_daytime_rb
         df = self.get_subset(date, size = window_size, mode = 'night')        
         assert len(df) > 0
         if not Eo: Eo = self.estimate_Eo()
@@ -341,6 +342,7 @@ class partition(object):
         except RuntimeError, e:
             print ('Fit of daytime rb failed with the following message {}'
                    .format(e))
+        self._fit_daytime_rb = state
         fig, ax = plt.subplots(1, 1, figsize = (14, 8))
         fig.patch.set_facecolor('white')
         ax.axhline(0, color = 'black')
@@ -348,8 +350,7 @@ class partition(object):
         ax.spines['top'].set_visible(False)
         ax.tick_params(axis = 'y', labelsize = 14)
         ax.tick_params(axis = 'x', labelsize = 14)
-        ax.set_title(dt.datetime.strftime(date.to_pydatetime(), '%Y-%m-%d'),
-                     fontsize = 18)
+        ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
         ax.set_xlabel('$Temperature\/(^oC)$', fontsize = 18)
         ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
         labels_dict = {'night': 'Night Eo and rb', 'day': 'Night Eo, day rb'}
@@ -370,6 +371,7 @@ class partition(object):
     #--------------------------------------------------------------------------
     def plot_nee(self, date, window_size = 15, Eo = None):
         
+        state = self._fit_daytime_rb
         df = self.get_subset(date, size = window_size, mode = 'day')
         assert len(df) > 0
         if not Eo: Eo = self.estimate_Eo()
@@ -388,6 +390,7 @@ class partition(object):
         except RuntimeError, e:
             print ('Fit of daytime parameters and rb failed with the '
                    'following message {}'.format(e))
+        self._fit_daytime_rb = state            
         fig, ax = plt.subplots(1, 1, figsize = (14, 8))
         fig.patch.set_facecolor('white')
         ax.axhline(0, color = 'black')
