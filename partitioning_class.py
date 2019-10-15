@@ -41,7 +41,7 @@ class partition(object):
           e.g. choice of [3, 1] would cause weighting of 3:1 in favour of air 
           temperature, or e.g. [1, 3] would result in the reverse.
     """
-    def __init__(self, dataframe, names_dict = None, weighting = 'air',
+    def __init__(self, dataframe, names_dict = None, weights_air_soil = 'air',
                  noct_threshold = 10, convert_to_photons = True):
 
         interval = int(''.join([x for x in pd.infer_freq(dataframe.index) 
@@ -60,7 +60,6 @@ class partition(object):
             self.noct_threshold = noct_threshold * 0.46 * 4.6
         else:
             self.noct_threshold = noct_threshold
-        self._fit_daytime_rb = fit_daytime_rb
 #------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -389,7 +388,7 @@ class partition(object):
             print('Fit of daytime parameters and rb failed with the '
                   'following message {}'.format(e))
         self._fit_daytime_rb = state        
-	fig, ax = plt.subplots(1, 1, figsize = (14, 8))
+        fig, ax = plt.subplots(1, 1, figsize = (14, 8))
         fig.patch.set_facecolor('white')
         ax.axhline(0, color = 'black')
         ax.set_xlim([0, df.PPFD.max() * 1.05])
@@ -500,7 +499,7 @@ def _rename_df(df, external_names, internal_names):
     assert sorted(external_names.keys()) == sorted(internal_names.keys())
     swap_dict = {external_names[key]: internal_names[key] 
                  for key in internal_names.keys()}
-    sub_df = df[swap_dict.keys()].copy()
+    sub_df = df[list(swap_dict.keys())].copy()
     sub_df.columns = swap_dict.values()
     return sub_df    
 #------------------------------------------------------------------------------
