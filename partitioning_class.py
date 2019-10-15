@@ -42,7 +42,8 @@ class partition(object):
           temperature, or e.g. [1, 3] would result in the reverse.
     """
     def __init__(self, dataframe, names_dict = None, weights_air_soil = 'air',
-                 noct_threshold = 10, convert_to_photons = True):
+                 noct_threshold = 10, fit_daytime_rb=False, 
+                 convert_to_photons = True):
 
         interval = int(''.join([x for x in pd.infer_freq(dataframe.index) 
                                 if x.isdigit()]))
@@ -60,6 +61,7 @@ class partition(object):
             self.noct_threshold = noct_threshold * 0.46 * 4.6
         else:
             self.noct_threshold = noct_threshold
+        self._fit_daytime_rb = fit_daytime_rb
 #------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
