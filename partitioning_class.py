@@ -10,7 +10,6 @@ import datetime as dt
 from lmfit import Model
 import matplotlib.pyplot as plt
 import numpy as np
-import operator
 import pandas as pd
 import pdb
 
@@ -64,19 +63,17 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def _day_params(self, date, Eo, window_size, priors_dict):
+    def _day_params(self, df, Eo, priors_dict):
 
         def model_fit(these_params):
-            return model.fit(df.NEE, par_series=df.PPFD, vpd_series=df.VPD,
-                             t_series=df.TC, params=these_params)
+            return model.fit(day_df.NEE, par_series=day_df.PPFD,
+                             vpd_series=day_df.VPD, t_series=day_df.TC,
+                             params=these_params)
 
-        if self._fit_daytime_rb:
-            rb_prior = priors_dict['rb']
-        else:
-            rb_prior = self._nocturnal_params(date, Eo, window_size,
-                                             priors_dict)['rb']
+        day_df = df.loc[df.Fsd > noct_threshold]
+        if self._fit_daytime_rb: rb_prior = priors_dict['rb']
+        else: rb_prior = _fit_nocturnal_params(df, Eo, priors_dict)['rb']
         beta_prior = priors_dict['beta']
-        df = self.get_subset(date, size = window_size, mode = 'day')
         try:
             if not len(df) > 4:
                 raise RuntimeError('insufficient data for fit')
@@ -111,19 +108,24 @@ class partition():
             priors_dict['alpha'] = result.best_values['alpha']
             return params_list[idx]
         except RuntimeError as e:
-            priors_dict['alpha'] = 0
+            priors_dict['alpha'] = -0.01
             raise RuntimeError(e)
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_Eo(self, window_size=15, window_step=5, get_stats=False):
+    def estimate_Eo(self, window_size=15, window_step=5):
 
         """Estimate the activation energy type parameter for the L&T Arrhenius
            style equation using nocturnal data"""
 
         Eo_list = []
-        for date in self.make_date_iterator(window_size, window_step):
-            df = self.get_subset(date, size=window_size, mode='night')
+        date_iterator = make_date_iterator(self.df, window_size, window_step,
+                                           self.interval)
+        for date in date_iterator.index:
+            df = get_subset(self.df,
+                            start=date_iterator.loc[date, 'Start'],
+                            end=date_iterator.loc[date, 'End'])
+            df = df.loc[df.Fsd < noct_threshold]
             if not len(df) > 6: continue
             if not df.TC.max() - df.TC.min() >= 5: continue
             f = Lloyd_and_Taylor
@@ -200,10 +202,15 @@ class partition():
         if not Eo: Eo = self.estimate_Eo()
         result_list, date_list = [], []
         print('Processing the following dates ({} mode): '.format(mode))
-        for date in self.make_date_iterator(window_size, window_step):
+        date_iterator = make_date_iterator(self.df, window_size, window_step,
+                                           self.interval)
+        for date in date_iterator.index:
+            df = get_subset(self.df,
+                            start=date_iterator.loc[date, 'Start'],
+                            end=date_iterator.loc[date, 'End'])
             print((date.date()), end=' ')
             try:
-                result_list.append(func(date, Eo, window_size, priors_dict))
+                result_list.append(func(df, Eo, priors_dict))
                 date_list.append(date)
                 print ()
             except RuntimeError as e:
@@ -225,50 +232,7 @@ class partition():
     #--------------------------------------------------------------------------
     def _get_func(self):
 
-        return {'night': self._nocturnal_params, 'day': self._day_params}
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    def get_subset(self, date, size, mode):
-
-        ops = {"day": operator.gt, "night": operator.lt}
-        ref_date = date + dt.timedelta(0.5)
-        date_tuple = (ref_date - dt.timedelta(size / 2.0 -
-                                              self.interval / 1440.0),
-                      ref_date + dt.timedelta(size / 2.0))
-        sub_df = self.df.loc[date_tuple[0]: date_tuple[1],
-                             ['NEE', 'PPFD', 'TC', 'VPD', 'Fsd']].dropna()
-        return sub_df[ops[mode](sub_df.Fsd, noct_threshold)]
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    def make_date_iterator(self, size, step):
-
-        """Get dates with appropriate spacing for window size and step"""
-
-        start_date = (self.df.index[0].to_pydatetime().date() +
-                      dt.timedelta(size / 2))
-        end_date = self.df.index[-1].to_pydatetime().date()
-        return pd.date_range(start_date, end_date,
-                             freq = '{}D'.format(str(step)))
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    def _nocturnal_params(self, date, Eo, window_size, priors_dict):
-
-        df = self.get_subset(date, size=window_size, mode='night')
-        if not len(df) > 2: raise RuntimeError('insufficient data for fit')
-        f = Lloyd_and_Taylor
-        model = Model(f, independent_vars = ['t_series'])
-        params = model.make_params(rb = priors_dict['rb'],
-                                   Eo = Eo)
-        params['Eo'].vary = False
-        result = model.fit(df.NEE,
-                           t_series = df.TC,
-                           params = params)
-        if result.params['rb'].value < 0: raise RuntimeError('rb parameter '
-                                                             'out of range')
-        return result.best_values
+        return {'night': _fit_nocturnal_params, 'day': self._day_params}
     #--------------------------------------------------------------------------
 
     # #--------------------------------------------------------------------------
@@ -387,7 +351,15 @@ class partition():
     #--------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+### FUNCTIONS ###
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 def _check_weights_format(weighting):
+
+    """Check the input format of the weights supplied by the user"""
 
     try:
         assert isinstance(weighting, (str, list))
@@ -441,6 +413,24 @@ def _define_default_external_names():
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+def _fit_nocturnal_params(df, Eo, priors_dict):
+
+    noct_df = df.loc[df.Fsd < noct_threshold]
+    if not len(noct_df) > 2: raise RuntimeError('insufficient data for fit')
+    f = Lloyd_and_Taylor
+    model = Model(f, independent_vars = ['t_series'])
+    params = model.make_params(rb = priors_dict['rb'],
+                               Eo = Eo)
+    params['Eo'].vary = False
+    result = model.fit(noct_df.NEE,
+                       t_series = noct_df.TC,
+                       params = params)
+    if result.params['rb'].value < 0: raise RuntimeError('rb parameter '
+                                                         'out of range')
+    return result.best_values
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 def _get_rename_map(external_names=None):
 
     """Convert external names to internal names"""
@@ -448,6 +438,14 @@ def _get_rename_map(external_names=None):
     internal_names = _define_default_internal_names()
     if not external_names: external_names = _define_default_external_names()
     return {external_names[key]: internal_names[key] for key in internal_names}
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def get_subset(df, start, end):
+
+    """Get the data subset from the complete dataset"""
+
+    return df.loc[start: end, ['NEE', 'PPFD', 'TC', 'VPD', 'Fsd']].dropna()
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -486,8 +484,8 @@ def Lloyd_and_Taylor(t_series, rb, Eo):
 #------------------------------------------------------------------------------
 def make_date_iterator(df, size, step, interval):
 
-    """Create a dataframe with the correct date steps and corresponding
-       window start and end"""
+    """Create a reference dataframe containing the requisite date steps and
+       corresponding window start and end"""
 
     start_date = (df.index[0].to_pydatetime().date() +
                   dt.timedelta(size / 2))
