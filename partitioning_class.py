@@ -38,10 +38,10 @@ class partition():
           common names (keys must be 'air_temperature', 'soil_temperature',
           'insolation', 'Cflux'); if None, defaults to the internal
           specification, which works for PyFluxPro.
-        * weights (str, or list of ints / floats): if str, must be either
-          'air' or 'soil', which determines which temperature series is used
-          for the fit; if list is supplied, it must have two numbers (ints or
-          floats), which are used for the weighting in the ratio air:soil
+        * weights_air_soil (str, or list of ints / floats): if str, must be
+          either 'air' or 'soil', which determines which temperature series is
+          used for the fit; if list is supplied, it must have two numbers (ints
+          or floats), which are used for the weighting in the ratio air:soil
           e.g. choice of [3, 1] would cause weighting of 3:1 in favour of air
           temperature, or e.g. [1, 3] would result in the reverse.
     """
@@ -64,7 +64,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def day_params(self, date, Eo, window_size, priors_dict):
+    def _day_params(self, date, Eo, window_size, priors_dict):
 
         def model_fit(these_params):
             return model.fit(df.NEE, par_series=df.PPFD, vpd_series=df.VPD,
@@ -73,14 +73,14 @@ class partition():
         if self._fit_daytime_rb:
             rb_prior = priors_dict['rb']
         else:
-            rb_prior = self.nocturnal_params(date, Eo, window_size,
+            rb_prior = self._nocturnal_params(date, Eo, window_size,
                                              priors_dict)['rb']
         beta_prior = priors_dict['beta']
         df = self.get_subset(date, size = window_size, mode = 'day')
         try:
             if not len(df) > 4:
                 raise RuntimeError('insufficient data for fit')
-            f = _NEE_model
+            f = NEE_model
             model = Model(f, independent_vars = ['par_series', 'vpd_series',
                                                  't_series'])
             params = model.make_params(rb = rb_prior, Eo = Eo,
@@ -116,7 +116,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_Eo(self, window_size = 15, window_step = 5, get_stats = False):
+    def estimate_Eo(self, window_size=15, window_step=5, get_stats=False):
 
         """Estimate the activation energy type parameter for the L&T Arrhenius
            style equation using nocturnal data"""
@@ -126,7 +126,7 @@ class partition():
             df = self.get_subset(date, size=window_size, mode='night')
             if not len(df) > 6: continue
             if not df.TC.max() - df.TC.min() >= 5: continue
-            f = _Lloyd_and_Taylor
+            f = Lloyd_and_Taylor
             model = Model(f, independent_vars = ['t_series'])
             params = model.make_params(rb = 1,
                                        Eo = self.prior_parameter_estimates()['Eo'])
@@ -152,7 +152,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_er_time_series(self, params_df = False):
+    def estimate_er_time_series(self, params_df=False):
 
         if not isinstance(params_df, pd.core.frame.DataFrame):
             params_df = self.estimate_parameters(mode = 'night')
@@ -161,7 +161,7 @@ class partition():
             params = params_df.loc[date]
             str_date = dt.datetime.strftime(date, '%Y-%m-%d')
             data = self.df.loc[str_date, 'TC']
-            resp_series = resp_series.append(_Lloyd_and_Taylor
+            resp_series = resp_series.append(Lloyd_and_Taylor
                                              (t_series = data,
                                               Eo = params.Eo, rb = params.rb))
         return resp_series
@@ -177,7 +177,7 @@ class partition():
             params = params_df.loc[date]
             str_date = dt.datetime.strftime(date, '%Y-%m-%d')
             data = self.df.loc[str_date, ['PPFD', 'VPD']]
-            gpp_series = gpp_series.append(_rectangular_hyperbola
+            gpp_series = gpp_series.append(rectangular_hyperbola
                                            (par_series = data.PPFD,
                                             vpd_series = data.VPD,
                                             alpha = params.alpha,
@@ -193,8 +193,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_parameters(self, mode, Eo=None, window_size=4,
-                            window_step=4):
+    def estimate_parameters(self, mode, Eo=None, window_size=4, window_step=4):
 
         priors_dict = self.prior_parameter_estimates()
         func = self._get_func()[mode]
@@ -226,7 +225,7 @@ class partition():
     #--------------------------------------------------------------------------
     def _get_func(self):
 
-        return {'night': self.nocturnal_params, 'day': self.day_params}
+        return {'night': self._nocturnal_params, 'day': self._day_params}
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -255,11 +254,11 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def nocturnal_params(self, date, Eo, window_size, priors_dict):
+    def _nocturnal_params(self, date, Eo, window_size, priors_dict):
 
         df = self.get_subset(date, size=window_size, mode='night')
         if not len(df) > 2: raise RuntimeError('insufficient data for fit')
-        f = _Lloyd_and_Taylor
+        f = Lloyd_and_Taylor
         model = Model(f, independent_vars = ['t_series'])
         params = model.make_params(rb = priors_dict['rb'],
                                    Eo = Eo)
@@ -281,7 +280,7 @@ class partition():
     #     results_dict = {}
     #     try:
     #         results_dict['night'] = (
-    #                 self.nocturnal_params(date, Eo, window_size,
+    #                 self._nocturnal_params(date, Eo, window_size,
     #                                       self.prior_parameter_estimates()))['rb']
     #     except RuntimeError as e:
     #         print('Fit of nocturnal rb failed with the following message {}'
@@ -289,7 +288,7 @@ class partition():
     #     try:
     #         self._fit_daytime_rb = True
     #         results_dict['day'] = (
-    #                 self.day_params(date, Eo, window_size,
+    #                 self._day_params(date, Eo, window_size,
     #                                 self.prior_parameter_estimates()))['rb']
     #     except RuntimeError as e:
     #         print('Fit of daytime rb failed with the following message {}'
@@ -311,7 +310,7 @@ class partition():
     #             label = 'Observations')
     #     df['TC_alt'] = np.linspace(df.TC.min(), df.TC.max(), len(df))
     #     for key in list(results_dict.keys()):
-    #         s = _Lloyd_and_Taylor(t_series = df.TC_alt, rb = results_dict[key],
+    #         s = Lloyd_and_Taylor(t_series = df.TC_alt, rb = results_dict[key],
     #                               Eo = Eo)
     #         ax.plot(df.TC_alt, s, color = 'black', ls = styles_dict[key],
     #                 label = labels_dict[key])
@@ -329,14 +328,14 @@ class partition():
     #     results_dict = {}
     #     try:
     #         self._fit_daytime_rb = False
-    #         results_dict['night'] = (self.day_params(date, Eo, window_size,
+    #         results_dict['night'] = (self._day_params(date, Eo, window_size,
     #                                  self.prior_parameter_estimates()))
     #     except RuntimeError as e:
     #         print('Fit of daytime parameters and nocturnal rb failed with '
     #               'the following message {}'.format(e))
     #     try:
     #         self._fit_daytime_rb = True
-    #         results_dict['day'] = (self.day_params(date, Eo, window_size,
+    #         results_dict['day'] = (self._day_params(date, Eo, window_size,
     #                                self.prior_parameter_estimates()))
     #     except RuntimeError as e:
     #         print('Fit of daytime parameters and rb failed with the '
@@ -362,7 +361,7 @@ class partition():
     #             label = 'Observations')
     #     for key in list(results_dict.keys()):
     #         params = results_dict[key]
-    #         s = _NEE_model(par_series=df.PPFD, vpd_series=df.VPD,
+    #         s = NEE_model(par_series=df.PPFD, vpd_series=df.VPD,
     #                        t_series=df.TC, rb = params['rb'],
     #                        Eo = params['Eo'], alpha = params['alpha'],
     #                        beta = params['beta'], k = params['k'])
@@ -416,7 +415,8 @@ def _check_weights_format(weighting):
 #------------------------------------------------------------------------------
 def _define_default_internal_names():
 
-    """Defines the internal names used by the algorithm"""
+    """Map the variable names in the internal dataset to generic variable
+       references"""
 
     return {'Cflux': 'NEE',
             'air_temperature': 'Ta',
@@ -429,7 +429,7 @@ def _define_default_internal_names():
 #------------------------------------------------------------------------------
 def _define_default_external_names():
 
-    """Maps the variable names in the external dataset to generic variable
+    """Map the variable names in the external dataset to generic variable
        references"""
 
     return {'Cflux': 'Fc',
@@ -476,11 +476,35 @@ def get_weighted_temperature(df, weighting):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _Lloyd_and_Taylor(t_series, rb, Eo):
+def Lloyd_and_Taylor(t_series, rb, Eo):
 
     """Arrhenius style equation as used in Lloyd and Taylor 1994"""
 
     return rb  * np.exp(Eo * (1 / (10 + 46.02) - 1 / (t_series + 46.02)))
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def make_date_iterator(df, size, step, interval):
+
+    """Create a dataframe with the correct date steps and corresponding
+       window start and end"""
+
+    start_date = (df.index[0].to_pydatetime().date() +
+                  dt.timedelta(size / 2))
+    end_date = (df.index[-1].to_pydatetime().date() -
+                dt.timedelta(size / 2))
+    date_df = (
+        pd.DataFrame(index=pd.date_range(start_date, end_date,
+                                         freq = '{}D'.format(str(step))),
+                     columns=['Start', 'End'])
+        )
+    for this_date in date_df.index:
+        ref_date = this_date + dt.timedelta(0.5)
+        date_df.loc[this_date, 'Start'] = (
+            ref_date - dt.timedelta(size / 2.0 - interval / 1440.0)
+            )
+        date_df.loc[this_date, 'End'] = ref_date + dt.timedelta(size / 2.0)
+    return date_df
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -496,7 +520,7 @@ def make_formatted_df(df, variable_map, weighting):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
+def rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
 
     """Rectangular hyperbola as used in Lasslop et al 2010"""
 
@@ -511,10 +535,10 @@ def _rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _NEE_model(par_series, vpd_series, t_series, rb, Eo, alpha, beta, k):
+def NEE_model(par_series, vpd_series, t_series, rb, Eo, alpha, beta, k):
 
     """Complete model containing both temperature and light response functions"""
 
-    return (_rectangular_hyperbola(par_series, vpd_series, alpha, beta, k) +
-            _Lloyd_and_Taylor(t_series, rb, Eo))
+    return (rectangular_hyperbola(par_series, vpd_series, alpha, beta, k) +
+            Lloyd_and_Taylor(t_series, rb, Eo))
 #------------------------------------------------------------------------------
