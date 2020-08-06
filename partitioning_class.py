@@ -14,7 +14,11 @@ import operator
 import pandas as pd
 import pdb
 
-import utils
+#------------------------------------------------------------------------------
+### CONSTANTS ###
+#------------------------------------------------------------------------------
+
+noct_threshold = 10
 
 #------------------------------------------------------------------------------
 # Init
@@ -42,21 +46,16 @@ class partition():
           temperature, or e.g. [1, 3] would result in the reverse.
     """
     def __init__(self, dataframe, names_dict=None, weights_air_soil='air',
-                 noct_threshold=10, fit_daytime_rb=False,
-                 convert_to_photons=True):
+                 fit_daytime_rb=False):
 
         interval = int(''.join([x for x in pd.infer_freq(dataframe.index)
                                 if x.isdigit()]))
         assert interval % 30 == 0
         self.interval = interval
         self.variable_map = _get_rename_map(names_dict)
-        self.convert_to_photons = convert_to_photons
         self.weighting = _check_weights_format(weights_air_soil)
-        self.df = self._make_formatted_df(dataframe)
-        if convert_to_photons:
-            self.noct_threshold = noct_threshold * 0.46 * 4.6
-        else:
-            self.noct_threshold = noct_threshold
+        self.df = make_formatted_df(dataframe, self.variable_map,
+                                    self.weighting)
         self._fit_daytime_rb = fit_daytime_rb
 #------------------------------------------------------------------------------
 
@@ -239,8 +238,8 @@ class partition():
                                               self.interval / 1440.0),
                       ref_date + dt.timedelta(size / 2.0))
         sub_df = self.df.loc[date_tuple[0]: date_tuple[1],
-                             ['NEE', 'PPFD', 'TC', 'VPD']].dropna()
-        return sub_df[ops[mode](sub_df.PPFD, self.noct_threshold)]
+                             ['NEE', 'PPFD', 'TC', 'VPD', 'Fsd']].dropna()
+        return sub_df[ops[mode](sub_df.Fsd, noct_threshold)]
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -256,27 +255,9 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def _make_formatted_df(self, df):
-
-        """Update this to check for soil temperature - if not there, default
-           to Ta"""
-
-        sub_df = df.rename(self.variable_map, axis='columns')
-        if self.convert_to_photons: sub_df['PPFD'] = sub_df['PPFD'] * 0.46 * 4.6
-        # if self.weighting == 'air': s = sub_df['Ta'].copy()
-        # if self.weighting == 'soil': s = sub_df['Ts'].copy()
-        # if isinstance(self.weighting, list):
-        #     s = (sub_df['Ta'] * self.weighting[0] +
-        #          sub_df['Ts'] * self.weighting[1]) / sum(self.weighting)
-        # s.name = 'TC'
-        weighted_T_series = get_weighted_temperature(sub_df, self.weighting)
-        return sub_df.join(weighted_T_series)
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
     def nocturnal_params(self, date, Eo, window_size, priors_dict):
 
-        df = self.get_subset(date, size = window_size, mode = 'night')
+        df = self.get_subset(date, size=window_size, mode='night')
         if not len(df) > 2: raise RuntimeError('insufficient data for fit')
         f = _Lloyd_and_Taylor
         model = Model(f, independent_vars = ['t_series'])
@@ -291,117 +272,117 @@ class partition():
         return result.best_values
     #--------------------------------------------------------------------------
 
-    #--------------------------------------------------------------------------
-    def plot_er(self, date, window_size = 15, Eo = None):
+    # #--------------------------------------------------------------------------
+    # def plot_er(self, date, window_size = 15, Eo = None):
 
-        df = self.get_subset(date, size = window_size, mode = 'night')
-        assert len(df) > 0
-        if not Eo: Eo = self.estimate_Eo()
-        results_dict = {}
-        try:
-            results_dict['night'] = (
-                    self.nocturnal_params(date, Eo, window_size,
-                                          self.prior_parameter_estimates()))['rb']
-        except RuntimeError as e:
-            print('Fit of nocturnal rb failed with the following message {}'
-                  .format(e))
-        try:
-            self._fit_daytime_rb = True
-            results_dict['day'] = (
-                    self.day_params(date, Eo, window_size,
-                                    self.prior_parameter_estimates()))['rb']
-        except RuntimeError as e:
-            print('Fit of daytime rb failed with the following message {}'
-                  .format(e))
-        fig, ax = plt.subplots(1, 1, figsize = (14, 8))
-        fig.patch.set_facecolor('white')
-        ax.axhline(0, color = 'black')
-        ax.spines['right'].set_visible(False)
-        ax.spines['top'].set_visible(False)
-        ax.tick_params(axis = 'y', labelsize = 14)
-        ax.tick_params(axis = 'x', labelsize = 14)
-        ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
-        ax.set_xlabel('$Temperature\/(^oC)$', fontsize = 18)
-        ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
-        labels_dict = {'night': 'Night Eo and rb', 'day': 'Night Eo, day rb'}
-        styles_dict = {'night': '--', 'day': ':'}
-        ax.plot(df.TC, df.NEE, color = 'None', marker = 'o',
-                mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
-                label = 'Observations')
-        df['TC_alt'] = np.linspace(df.TC.min(), df.TC.max(), len(df))
-        for key in list(results_dict.keys()):
-            s = _Lloyd_and_Taylor(t_series = df.TC_alt, rb = results_dict[key],
-                                  Eo = Eo)
-            ax.plot(df.TC_alt, s, color = 'black', ls = styles_dict[key],
-                    label = labels_dict[key])
-        ax.legend(loc = [0.05, 0.8], fontsize = 12)
-        return fig
-    #--------------------------------------------------------------------------
+    #     df = self.get_subset(date, size = window_size, mode = 'night')
+    #     assert len(df) > 0
+    #     if not Eo: Eo = self.estimate_Eo()
+    #     results_dict = {}
+    #     try:
+    #         results_dict['night'] = (
+    #                 self.nocturnal_params(date, Eo, window_size,
+    #                                       self.prior_parameter_estimates()))['rb']
+    #     except RuntimeError as e:
+    #         print('Fit of nocturnal rb failed with the following message {}'
+    #               .format(e))
+    #     try:
+    #         self._fit_daytime_rb = True
+    #         results_dict['day'] = (
+    #                 self.day_params(date, Eo, window_size,
+    #                                 self.prior_parameter_estimates()))['rb']
+    #     except RuntimeError as e:
+    #         print('Fit of daytime rb failed with the following message {}'
+    #               .format(e))
+    #     fig, ax = plt.subplots(1, 1, figsize = (14, 8))
+    #     fig.patch.set_facecolor('white')
+    #     ax.axhline(0, color = 'black')
+    #     ax.spines['right'].set_visible(False)
+    #     ax.spines['top'].set_visible(False)
+    #     ax.tick_params(axis = 'y', labelsize = 14)
+    #     ax.tick_params(axis = 'x', labelsize = 14)
+    #     ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
+    #     ax.set_xlabel('$Temperature\/(^oC)$', fontsize = 18)
+    #     ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
+    #     labels_dict = {'night': 'Night Eo and rb', 'day': 'Night Eo, day rb'}
+    #     styles_dict = {'night': '--', 'day': ':'}
+    #     ax.plot(df.TC, df.NEE, color = 'None', marker = 'o',
+    #             mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
+    #             label = 'Observations')
+    #     df['TC_alt'] = np.linspace(df.TC.min(), df.TC.max(), len(df))
+    #     for key in list(results_dict.keys()):
+    #         s = _Lloyd_and_Taylor(t_series = df.TC_alt, rb = results_dict[key],
+    #                               Eo = Eo)
+    #         ax.plot(df.TC_alt, s, color = 'black', ls = styles_dict[key],
+    #                 label = labels_dict[key])
+    #     ax.legend(loc = [0.05, 0.8], fontsize = 12)
+    #     return fig
+    # #--------------------------------------------------------------------------
 
-    #--------------------------------------------------------------------------
-    def plot_nee(self, date, window_size = 15, Eo = None):
+    # #--------------------------------------------------------------------------
+    # def plot_nee(self, date, window_size = 15, Eo = None):
 
-        state = self._fit_daytime_rb
-        df = self.get_subset(date, size = window_size, mode = 'day')
-        assert len(df) > 0
-        if not Eo: Eo = self.estimate_Eo()
-        results_dict = {}
-        try:
-            self._fit_daytime_rb = False
-            results_dict['night'] = (self.day_params(date, Eo, window_size,
-                                     self.prior_parameter_estimates()))
-        except RuntimeError as e:
-            print('Fit of daytime parameters and nocturnal rb failed with '
-                  'the following message {}'.format(e))
-        try:
-            self._fit_daytime_rb = True
-            results_dict['day'] = (self.day_params(date, Eo, window_size,
-                                   self.prior_parameter_estimates()))
-        except RuntimeError as e:
-            print('Fit of daytime parameters and rb failed with the '
-                  'following message {}'.format(e))
-        self._fit_daytime_rb = state
-        fig, ax = plt.subplots(1, 1, figsize = (14, 8))
-        fig.patch.set_facecolor('white')
-        ax.axhline(0, color = 'black')
-        ax.set_xlim([0, df.PPFD.max() * 1.05])
-        ax.spines['right'].set_visible(False)
-        ax.spines['top'].set_visible(False)
-        ax.tick_params(axis = 'y', labelsize = 14)
-        ax.tick_params(axis = 'x', labelsize = 14)
-        ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
-        ax.set_xlabel('$PPFD\/(\mu mol\/photons\/m^{-2}\/s^{-1})$',
-                      fontsize = 18)
-        ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
-        labels_dict = {'night': 'Night Eo and rb', 'day': 'Night Eo, day rb'}
-        markers_dict = {'night': '+', 'day': 'x'}
-        colors_dict = {'night': 'blue', 'day': 'magenta'}
-        ax.plot(df.PPFD, df.NEE, color = 'None', marker = 'o',
-                mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
-                label = 'Observations')
-        for key in list(results_dict.keys()):
-            params = results_dict[key]
-            s = _NEE_model(par_series=df.PPFD, vpd_series=df.VPD,
-                           t_series=df.TC, rb = params['rb'],
-                           Eo = params['Eo'], alpha = params['alpha'],
-                           beta = params['beta'], k = params['k'])
-            ax.plot(df.PPFD, s, color = colors_dict[key],
-                    marker = markers_dict[key], label = labels_dict[key],
-                    ls = 'None')
-        ax.legend(loc = [0.05, 0.1], fontsize = 12)
-        return fig
-    #--------------------------------------------------------------------------
+    #     state = self._fit_daytime_rb
+    #     df = self.get_subset(date, size = window_size, mode = 'day')
+    #     assert len(df) > 0
+    #     if not Eo: Eo = self.estimate_Eo()
+    #     results_dict = {}
+    #     try:
+    #         self._fit_daytime_rb = False
+    #         results_dict['night'] = (self.day_params(date, Eo, window_size,
+    #                                  self.prior_parameter_estimates()))
+    #     except RuntimeError as e:
+    #         print('Fit of daytime parameters and nocturnal rb failed with '
+    #               'the following message {}'.format(e))
+    #     try:
+    #         self._fit_daytime_rb = True
+    #         results_dict['day'] = (self.day_params(date, Eo, window_size,
+    #                                self.prior_parameter_estimates()))
+    #     except RuntimeError as e:
+    #         print('Fit of daytime parameters and rb failed with the '
+    #               'following message {}'.format(e))
+    #     self._fit_daytime_rb = state
+    #     fig, ax = plt.subplots(1, 1, figsize = (14, 8))
+    #     fig.patch.set_facecolor('white')
+    #     ax.axhline(0, color = 'black')
+    #     ax.set_xlim([0, df.PPFD.max() * 1.05])
+    #     ax.spines['right'].set_visible(False)
+    #     ax.spines['top'].set_visible(False)
+    #     ax.tick_params(axis = 'y', labelsize = 14)
+    #     ax.tick_params(axis = 'x', labelsize = 14)
+    #     ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
+    #     ax.set_xlabel('$PPFD\/(\mu mol\/photons\/m^{-2}\/s^{-1})$',
+    #                   fontsize = 18)
+    #     ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
+    #     labels_dict = {'night': 'Night Eo and rb', 'day': 'Night Eo, day rb'}
+    #     markers_dict = {'night': '+', 'day': 'x'}
+    #     colors_dict = {'night': 'blue', 'day': 'magenta'}
+    #     ax.plot(df.PPFD, df.NEE, color = 'None', marker = 'o',
+    #             mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
+    #             label = 'Observations')
+    #     for key in list(results_dict.keys()):
+    #         params = results_dict[key]
+    #         s = _NEE_model(par_series=df.PPFD, vpd_series=df.VPD,
+    #                        t_series=df.TC, rb = params['rb'],
+    #                        Eo = params['Eo'], alpha = params['alpha'],
+    #                        beta = params['beta'], k = params['k'])
+    #         ax.plot(df.PPFD, s, color = colors_dict[key],
+    #                 marker = markers_dict[key], label = labels_dict[key],
+    #                 ls = 'None')
+    #     ax.legend(loc = [0.05, 0.1], fontsize = 12)
+    #     return fig
+    # #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
     def prior_parameter_estimates(self):
 
-        return {'rb': self.df.loc[self.df.PPFD < self.noct_threshold,
+        return {'rb': self.df.loc[self.df.Fsd < noct_threshold,
                                   'NEE'].mean(),
                 'Eo': 100,
                 'alpha': -0.01,
-                'beta': (self.df.loc[self.df.PPFD > self.noct_threshold,
+                'beta': (self.df.loc[self.df.Fsd > noct_threshold,
                                      'NEE'].quantile(0.03)-
-                          self.df.loc[self.df.PPFD > 10,
+                          self.df.loc[self.df.PPFD > noct_threshold,
                                       'NEE'].quantile(0.97)),
                 'k': 0}
     #--------------------------------------------------------------------------
@@ -440,7 +421,7 @@ def _define_default_internal_names():
     return {'Cflux': 'NEE',
             'air_temperature': 'Ta',
             'soil_temperature': 'Ts',
-            'insolation': 'PPFD',
+            'insolation': 'Fsd',
             'vapour_pressure_deficit': 'VPD',
             'PPFD': 'PPFD'}
 #------------------------------------------------------------------------------
@@ -457,6 +438,16 @@ def _define_default_external_names():
             'insolation': 'Fsd',
             'vapour_pressure_deficit': 'VPD',
             'PPFD': None}
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def _get_rename_map(external_names=None):
+
+    """Convert external names to internal names"""
+
+    internal_names = _define_default_internal_names()
+    if not external_names: external_names = _define_default_external_names()
+    return {external_names[key]: internal_names[key] for key in internal_names}
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -493,6 +484,18 @@ def _Lloyd_and_Taylor(t_series, rb, Eo):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+def make_formatted_df(df, variable_map, weighting):
+
+    """Do renaming and variable conversions"""
+
+    sub_df = df.rename(variable_map, axis='columns')
+    if not 'PPFD' in variable_map:
+        sub_df['PPFD'] = sub_df['Fsd'] * 0.46 * 4.6
+    weighted_T_series = get_weighted_temperature(sub_df, weighting)
+    return sub_df.join(weighted_T_series)
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 def _rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
 
     """Rectangular hyperbola as used in Lasslop et al 2010"""
@@ -514,14 +517,4 @@ def _NEE_model(par_series, vpd_series, t_series, rb, Eo, alpha, beta, k):
 
     return (_rectangular_hyperbola(par_series, vpd_series, alpha, beta, k) +
             _Lloyd_and_Taylor(t_series, rb, Eo))
-#------------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
-def _get_rename_map(external_names=None):
-
-    """Convert external names to internal names"""
-
-    internal_names = _define_default_internal_names()
-    if not external_names: external_names = _define_default_external_names()
-    return {external_names[key]: internal_names[key] for key in internal_names}
 #------------------------------------------------------------------------------
