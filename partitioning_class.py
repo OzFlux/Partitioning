@@ -21,7 +21,7 @@ import utils
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-class partition(object):
+class partition():
     """
     Class for fitting of respiration parameters and estimation of respiration
     WARNING - NO FILTERING OR DATA INTEGRITY CHECKS APPLIED HERE!!!
@@ -41,19 +41,19 @@ class partition(object):
           e.g. choice of [3, 1] would cause weighting of 3:1 in favour of air
           temperature, or e.g. [1, 3] would result in the reverse.
     """
-    def __init__(self, dataframe, names_dict = None, weights_air_soil = 'air',
-                 noct_threshold = 10, fit_daytime_rb=False,
-                 convert_to_photons = True):
+    def __init__(self, dataframe, names_dict=None, weights_air_soil='air',
+                 noct_threshold=10, fit_daytime_rb=False,
+                 convert_to_photons=True):
 
         interval = int(''.join([x for x in pd.infer_freq(dataframe.index)
                                 if x.isdigit()]))
         assert interval % 30 == 0
         self.interval = interval
         if not names_dict:
-            self.external_names = self._define_default_external_names()
+            self.external_names = _define_default_external_names()
         else:
             self.external_names = names_dict
-        self.internal_names = self._define_default_internal_names()
+        self.internal_names = _define_default_internal_names()
         self.convert_to_photons = convert_to_photons
         self.weighting = _check_weights_format(weights_air_soil)
         self.df = self._make_formatted_df(dataframe)
@@ -72,9 +72,8 @@ class partition(object):
     def day_params(self, date, Eo, window_size, priors_dict):
 
         def model_fit(these_params):
-            return model.fit(df.NEE,
-                             par_series = df.PPFD, vpd_series = df.VPD,
-                             t_series = df.TC, params = these_params)
+            return model.fit(df.NEE, par_series=df.PPFD, vpd_series=df.VPD,
+                             t_series=df.TC, params=these_params)
 
         if self._fit_daytime_rb:
             rb_prior = priors_dict['rb']
@@ -119,31 +118,6 @@ class partition(object):
         except RuntimeError as e:
             priors_dict['alpha'] = 0
             raise RuntimeError(e)
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    """Defines the internal names used by the algorithm"""
-
-    def _define_default_internal_names(self):
-
-        return {'Cflux': 'NEE',
-                'air_temperature': 'Ta',
-                'soil_temperature': 'Ts',
-                'insolation': 'PPFD',
-                'vapour_pressure_deficit': 'VPD'}
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    """Maps the variable names in the external dataset to generic variable
-       references"""
-
-    def _define_default_external_names(self):
-
-        return {'Cflux': 'Fc',
-                'air_temperature': 'Ta',
-                'soil_temperature': 'Ts',
-                'insolation': 'Fsd',
-                'vapour_pressure_deficit': 'VPD'}
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -226,8 +200,8 @@ class partition(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_parameters(self, mode, Eo = None, window_size = 4,
-                            window_step = 4):
+    def estimate_parameters(self, mode, Eo=None, window_size=4,
+                            window_step=4):
 
         priors_dict = self.prior_parameter_estimates()
         func = self._get_func()[mode]
@@ -278,6 +252,8 @@ class partition(object):
     #--------------------------------------------------------------------------
     def make_date_iterator(self, size, step):
 
+        """Get dates with appropriate spacing for window size and step"""
+
         start_date = (self.df.index[0].to_pydatetime().date() +
                       dt.timedelta(size / 2))
         end_date = self.df.index[-1].to_pydatetime().date()
@@ -291,7 +267,7 @@ class partition(object):
         """Update this to check for soil temperature - if not there, default
            to Ta"""
 
-        sub_df = _rename_df(df, self.external_names, self.internal_names)
+        sub_df = _rename_df(df)
         if self.convert_to_photons: sub_df['PPFD'] = sub_df['PPFD'] * 0.46 * 4.6
         if self.weighting == 'air': s = sub_df['Ta'].copy()
         if self.weighting == 'soil': s = sub_df['Ts'].copy()
@@ -462,17 +438,44 @@ def _check_weights_format(weighting):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-"""Arrhenius style equation as used in Lloyd and Taylor 1994"""
+def _define_default_internal_names():
 
+    """Defines the internal names used by the algorithm"""
+
+    return {'Cflux': 'NEE',
+            'air_temperature': 'Ta',
+            'soil_temperature': 'Ts',
+            'insolation': 'PPFD',
+            'vapour_pressure_deficit': 'VPD',
+            'PPFD': 'PPFD'}
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def _define_default_external_names():
+
+    """Maps the variable names in the external dataset to generic variable
+       references"""
+
+    return {'Cflux': 'Fc',
+            'air_temperature': 'Ta',
+            'soil_temperature': 'Ts',
+            'insolation': 'Fsd',
+            'vapour_pressure_deficit': 'VPD',
+            'PPFD': None}
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 def _Lloyd_and_Taylor(t_series, rb, Eo):
+
+    """Arrhenius style equation as used in Lloyd and Taylor 1994"""
 
     return rb  * np.exp(Eo * (1 / (10 + 46.02) - 1 / (t_series + 46.02)))
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-"""Rectangular hyperbola as used in Lasslop et al 2010"""
-
 def _rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
+
+    """Rectangular hyperbola as used in Lasslop et al 2010"""
 
     beta_VPD = beta * np.exp(-k * (vpd_series - 1))
     index = vpd_series <= 1
@@ -485,23 +488,22 @@ def _rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-"""Complete model containing both temperature and ligh response functions"""
-
 def _NEE_model(par_series, vpd_series, t_series, rb, Eo, alpha, beta, k):
+
+    """Complete model containing both temperature and ligh response functions"""
 
     return (_rectangular_hyperbola(par_series, vpd_series, alpha, beta, k) +
             _Lloyd_and_Taylor(t_series, rb, Eo))
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-"""Convert external names to internal names"""
+def _rename_df(df, external_names=None):
 
-def _rename_df(df, external_names, internal_names):
+    """Convert external names to internal names"""
 
-    assert sorted(external_names.keys()) == sorted(internal_names.keys())
-    swap_dict = {external_names[key]: internal_names[key]
-                 for key in internal_names.keys()}
-    sub_df = df[list(swap_dict.keys())].copy()
-    sub_df.columns = swap_dict.values()
-    return sub_df
+    internal_names = _define_default_internal_names()
+    if not external_names: external_names = _define_default_external_names()
+    mapper_dict = {external_names[key]: internal_names[key]
+                   for key in internal_names}
+    return df.rename(mapper=mapper_dict, axis='columns')
 #------------------------------------------------------------------------------
