@@ -49,11 +49,7 @@ class partition():
                                 if x.isdigit()]))
         assert interval % 30 == 0
         self.interval = interval
-        if not names_dict:
-            self.external_names = _define_default_external_names()
-        else:
-            self.external_names = names_dict
-        self.internal_names = _define_default_internal_names()
+        self.variable_map = _get_rename_map(names_dict)
         self.convert_to_photons = convert_to_photons
         self.weighting = _check_weights_format(weights_air_soil)
         self.df = self._make_formatted_df(dataframe)
@@ -128,7 +124,7 @@ class partition():
 
         Eo_list = []
         for date in self.make_date_iterator(window_size, window_step):
-            df = self.get_subset(date, size = window_size, mode = 'night')
+            df = self.get_subset(date, size=window_size, mode='night')
             if not len(df) > 6: continue
             if not df.TC.max() - df.TC.min() >= 5: continue
             f = _Lloyd_and_Taylor
@@ -173,7 +169,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_gpp_time_series(self, params_df = False):
+    def estimate_gpp_time_series(self, params_df=False):
 
         if not isinstance(params_df, pd.core.frame.DataFrame):
             params_df = self.estimate_parameters(mode = 'day')
@@ -188,13 +184,11 @@ class partition():
                                             alpha = params.alpha,
                                             beta = params.beta,
                                             k = params.k))
-
         return gpp_series
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_nee_time_series(self, params_df = False,
-                                 splice_with_obs = False):
+    def estimate_nee_time_series(self, params_df=False, splice_with_obs=False):
         return (self.estimate_gpp_time_series(params_df) +
                 self.estimate_er_time_series(params_df))
     #--------------------------------------------------------------------------
@@ -267,15 +261,16 @@ class partition():
         """Update this to check for soil temperature - if not there, default
            to Ta"""
 
-        sub_df = _rename_df(df)
+        sub_df = df.rename(self.variable_map, axis='columns')
         if self.convert_to_photons: sub_df['PPFD'] = sub_df['PPFD'] * 0.46 * 4.6
-        if self.weighting == 'air': s = sub_df['Ta'].copy()
-        if self.weighting == 'soil': s = sub_df['Ts'].copy()
-        if isinstance(self.weighting, list):
-            s = (sub_df['Ta'] * self.weighting[0] +
-                 sub_df['Ts'] * self.weighting[1]) / sum(self.weighting)
-        s.name = 'TC'
-        return sub_df.join(s)
+        # if self.weighting == 'air': s = sub_df['Ta'].copy()
+        # if self.weighting == 'soil': s = sub_df['Ts'].copy()
+        # if isinstance(self.weighting, list):
+        #     s = (sub_df['Ta'] * self.weighting[0] +
+        #          sub_df['Ts'] * self.weighting[1]) / sum(self.weighting)
+        # s.name = 'TC'
+        weighted_T_series = get_weighted_temperature(sub_df, self.weighting)
+        return sub_df.join(weighted_T_series)
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -465,6 +460,31 @@ def _define_default_external_names():
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+def get_weighted_temperature(df, weighting):
+
+    """Weight air and soil temperatures according to user input"""
+
+    soil_T_flag = True if 'Ts' in df.columns else False
+    if weighting == 'air': s = df.Ta.copy()
+    if weighting == 'soil':
+        if soil_T_flag:
+            s = df.Ts.copy()
+        else:
+            print ('No soil temperature variable specified in input data... '
+                   'defaulting to air temperature!')
+            s = df.Ta.copy()
+    if isinstance(weighting, list):
+        if soil_T_flag:
+            s = (df.Ta * weighting[0] + df.Ts * weighting[1]) / sum(weighting)
+        else:
+            print ('Cannot weight air and soil temperatures without soil '
+                   'temperature! defaulting to air temperature!')
+            s = df.Ta.copy()
+    s.name = 'TC'
+    return s
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 def _Lloyd_and_Taylor(t_series, rb, Eo):
 
     """Arrhenius style equation as used in Lloyd and Taylor 1994"""
@@ -490,20 +510,18 @@ def _rectangular_hyperbola(par_series, vpd_series, alpha, beta, k):
 #------------------------------------------------------------------------------
 def _NEE_model(par_series, vpd_series, t_series, rb, Eo, alpha, beta, k):
 
-    """Complete model containing both temperature and ligh response functions"""
+    """Complete model containing both temperature and light response functions"""
 
     return (_rectangular_hyperbola(par_series, vpd_series, alpha, beta, k) +
             _Lloyd_and_Taylor(t_series, rb, Eo))
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _rename_df(df, external_names=None):
+def _get_rename_map(external_names=None):
 
     """Convert external names to internal names"""
 
     internal_names = _define_default_internal_names()
     if not external_names: external_names = _define_default_external_names()
-    mapper_dict = {external_names[key]: internal_names[key]
-                   for key in internal_names}
-    return df.rename(mapper=mapper_dict, axis='columns')
+    return {external_names[key]: internal_names[key] for key in internal_names}
 #------------------------------------------------------------------------------
