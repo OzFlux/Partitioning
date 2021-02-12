@@ -365,6 +365,46 @@ def _define_default_external_names():
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+def estimate_Eo(df, interval, window_size=15, window_step=5):
+
+    """Estimate the activation energy type parameter for the L&T Arrhenius
+       style equation using nocturnal data"""
+
+    Eo_list = []
+    date_iterator = make_date_iterator(df, window_size, window_step, interval)
+    for date in date_iterator.index:
+        df = get_subset(df,
+                        start=date_iterator.loc[date, 'Start'],
+                        end=date_iterator.loc[date, 'End'])
+        df = df.loc[df.Fsd < noct_threshold]
+        if not len(df) > 6: continue
+        if not df.TC.max() - df.TC.min() >= 5: continue
+        f = Lloyd_and_Taylor
+        model = Model(f, independent_vars = ['t_series'])
+        params = model.make_params(rb = 1,
+                                   Eo = _get_prior_parameter_estimates(df)['Eo'])
+        result = model.fit(df.NEE,
+                           t_series = df.TC,
+                           params = params)
+        if not 50 < result.params['Eo'].value < 400: continue
+        if result.params['Eo'].stderr > result.params['Eo'].value / 2.0:
+            continue
+        Eo_list.append([result.params['Eo'].value,
+                        result.params['Eo'].stderr])
+    if len(Eo_list) == 0: raise RuntimeError('Could not find any valid '
+                                             'estimates of Eo! Exiting...')
+    print('Found {} valid estimates of Eo'.format(str(len(Eo_list))))
+    Eo_array = np.array(Eo_list)
+    Eo = ((Eo_array[:, 0] / (Eo_array[:, 1])).sum() /
+          (1 / Eo_array[:, 1]).sum())
+    if not 50 < Eo < 400: raise RuntimeError('Eo value {} outside '
+                                             'acceptable parameter range '
+                                             '(50-400)! Exiting...'
+                                             .format(str(round(Eo, 2))))
+    return Eo
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 def _fit_day_params(df, Eo, priors_dict, fit_daytime_rb):
 
     """Optimise daytime parameters (rb) for a single data window
@@ -428,6 +468,21 @@ def _fit_nocturnal_params(df, Eo, priors_dict):
     if result.params['rb'].value < 0: raise RuntimeError('rb parameter '
                                                          'out of range')
     return result.best_values
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def get_interval(df):
+
+
+    """Get the time interval of the dataframe"""
+
+    interval = int(''.join([x for x in pd.infer_freq(df.index)
+                            if x.isdigit()]))
+    try: assert interval % 30 == 0
+    except AssertionError:
+        raise RuntimeError('Time interval of data is inconsistent or '
+                           'discontinuous!')
+    return interval
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
