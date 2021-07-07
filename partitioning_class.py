@@ -354,7 +354,7 @@ def _fit_nocturnal_params(df, Eo, priors_dict, noct_threshold):
     model = Model(f, independent_vars = ['t_series'])
     params = model.make_params(rb=priors_dict['rb'], Eo=Eo)
     params['Eo'].vary = False
-    result = model.fit(noct_df.NEE, t_series = noct_df.TC, params = params)
+    result = model.fit(noct_df.NEE, t_series=noct_df.TC, params=params)
     if result.params['rb'].value < 0:
         raise RuntimeError('rb parameter out of range')
     return result.best_values
