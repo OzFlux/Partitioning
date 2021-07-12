@@ -275,7 +275,7 @@ def _define_default_internal_names():
 def _define_default_external_names(names_dict=None):
 
     """Map the variable names in the external dataset to generic variable
-       references"""
+       references, and cross-check formatting of dictionary if required"""
 
     default_externals = {'Cflux': 'Fc',
                          'air_temperature': 'Ta',
@@ -297,8 +297,10 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold, fit_daytime_rb):
        (Eo must be passed as kwarg after running estimate_Eo function)"""
 
     def model_fit(these_params):
-        return model.fit(day_df.NEE, par_series=day_df.PPFD,
-                         vpd_series=day_df.VPD, t_series=day_df.TC,
+        return model.fit(day_df.NEE.to_numpy(),
+                         par_series=day_df.PPFD.to_numpy(),
+                         vpd_series=day_df.VPD.to_numpy(),
+                         t_series=day_df.TC.to_numpy(),
                          params=these_params)
 
     day_df = df.loc[df.Fsd > noct_threshold]
@@ -311,8 +313,7 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold, fit_daytime_rb):
     if not len(day_df) > 4:
         raise RuntimeError('insufficient data for fit')
     f = NEE_model
-    model = Model(f, independent_vars = ['par_series', 'vpd_series',
-                                         't_series'])
+    model = Model(f, independent_vars=['par_series', 'vpd_series', 't_series'])
     params = model.make_params(rb=rb_prior, Eo=Eo,
                                alpha=priors_dict['alpha'],
                                beta=beta_prior,
@@ -335,7 +336,9 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold, fit_daytime_rb):
             result = model_fit(these_params = params)
         if not -100 <= result.params['beta'].value <= 0:
             raise RuntimeError('beta parameter out of range')
-        rmse_list.append(np.sqrt(((df.NEE - result.best_fit)**2).sum()))
+        rmse_list.append(
+            np.sqrt(((day_df.NEE.to_numpy() - result.best_fit)**2).sum())
+            )
         params_list.append(result.best_values)
     idx = rmse_list.index(min(rmse_list))
     return params_list[idx]
@@ -354,7 +357,8 @@ def _fit_nocturnal_params(df, Eo, priors_dict, noct_threshold):
     model = Model(f, independent_vars = ['t_series'])
     params = model.make_params(rb=priors_dict['rb'], Eo=Eo)
     params['Eo'].vary = False
-    result = model.fit(noct_df.NEE, t_series=noct_df.TC, params=params)
+    result = model.fit(noct_df.NEE.to_numpy(), t_series=noct_df.TC.to_numpy(),
+                       params=params)
     if result.params['rb'].value < 0:
         raise RuntimeError('rb parameter out of range')
     return result.best_values
