@@ -65,8 +65,8 @@ class partition():
            style equation using nocturnal data"""
 
         Eo_list = []
-        date_iterator = make_date_iterator(self.df, window_size, window_step,
-                                           self.interval)
+        date_iterator = self.make_date_iterator(window=window_size,
+                                                step=window_step)
         for date in date_iterator.index:
             df = get_subset(self.df,
                             start=date_iterator.loc[date, 'Start'],
@@ -119,26 +119,26 @@ class partition():
             str_date = dt.datetime.strftime(date, '%Y-%m-%d')
             data = self.df.loc[str_date, 'TC']
             resp_series = resp_series.append(Lloyd_and_Taylor
-                                             (t_series=data,
+                                             (t_series=data.to_numpy(),
                                               Eo=params.Eo, rb=params.rb))
         return resp_series
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_gpp_time_series(self, params_df=False):
+    def estimate_gpp_time_series(self, params_df=False) -> pd.series:
 
         """Get the complete time series of modelled gross primary production"""
 
         if not isinstance(params_df, pd.core.frame.DataFrame):
-            params_df = self.estimate_parameters(mode = 'day')
+            params_df = self.estimate_parameters(mode='day')
         gpp_series = pd.Series()
         for date in params_df.index:
             params = params_df.loc[date]
             str_date = dt.datetime.strftime(date, '%Y-%m-%d')
             data = self.df.loc[str_date, ['PPFD', 'VPD']]
             gpp_series = gpp_series.append(rectangular_hyperbola
-                                           (par_series=data.PPFD,
-                                            vpd_series=data.VPD,
+                                           (par_series=data.PPFD.to_numpy(),
+                                            vpd_series=data.VPD.to_numpy(),
                                             alpha=params.alpha,
                                             beta=params.beta,
                                             k=params.k))
@@ -171,8 +171,8 @@ class partition():
             Eo = self.estimate_Eo()
         result_list, date_list = [], []
         print('Processing the following dates ({} mode): '.format(mode))
-        date_iterator = make_date_iterator(self.df, window_size, window_step,
-                                           self.interval)
+        date_iterator = self.make_date_iterator(window=window_size,
+                                                step=window_step)
         for date in date_iterator.index:
             df = get_subset(self.df,
                             start=date_iterator.loc[date, 'Start'],
@@ -225,6 +225,33 @@ class partition():
                         self.noct_threshold, 'NEE'].quantile(0.97)
             ),
         'k': 0}
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def make_date_iterator(self, window, step):
+
+        """Create a reference dataframe containing the requisite date steps and
+           corresponding window start and end"""
+
+        start, end = self.df.index[0], self.df.index[-1]
+        start_date = (
+            start.to_pydatetime().date() + dt.timedelta(window / 2)
+            )
+        end_date = (
+            end.to_pydatetime().date() - dt.timedelta(window / 2)
+            )
+        date_df = (
+            pd.DataFrame(index=pd.date_range(start_date, end_date,
+                                             freq = '{}D'.format(str(step))),
+                         columns=['Start', 'End'])
+            )
+        for this_date in date_df.index:
+            ref_date = this_date + dt.timedelta(0.5)
+            date_df.loc[this_date, 'Start'] = (
+                ref_date - dt.timedelta(window / 2.0 - self.interval / 1440.0)
+                )
+            date_df.loc[this_date, 'End'] = ref_date + dt.timedelta(window / 2.0)
+        return date_df
     #--------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -421,32 +448,6 @@ def Lloyd_and_Taylor(t_series, rb, Eo):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def make_date_iterator(df, size, step, interval):
-
-    """Create a reference dataframe containing the requisite date steps and
-       corresponding window start and end"""
-
-    start_date = (
-        df.index[0].to_pydatetime().date() + dt.timedelta(size / 2)
-        )
-    end_date = (
-        df.index[-1].to_pydatetime().date() - dt.timedelta(size / 2)
-        )
-    date_df = (
-        pd.DataFrame(index=pd.date_range(start_date, end_date,
-                                         freq = '{}D'.format(str(step))),
-                     columns=['Start', 'End'])
-        )
-    for this_date in date_df.index:
-        ref_date = this_date + dt.timedelta(0.5)
-        date_df.loc[this_date, 'Start'] = (
-            ref_date - dt.timedelta(size / 2.0 - interval / 1440.0)
-            )
-        date_df.loc[this_date, 'End'] = ref_date + dt.timedelta(size / 2.0)
-    return date_df
-#------------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
 def make_formatted_df(df, variable_map, weighting):
 
     """Do renaming and variable conversions"""
@@ -481,108 +482,3 @@ def NEE_model(par_series, vpd_series, t_series, rb, Eo, alpha, beta, k):
     return (rectangular_hyperbola(par_series, vpd_series, alpha, beta, k) +
             Lloyd_and_Taylor(t_series, rb, Eo))
 #------------------------------------------------------------------------------
-
-    # #--------------------------------------------------------------------------
-    # def plot_er(self, date_start, date_end, Eo=None):
-
-    #     df = get_subset(self.df, start=date_start, end=date_end)
-    #     assert len(df) > 0
-    #     if not Eo: Eo = self.estimate_Eo()
-    #     results_dict = {}
-    #     try:
-    #         results_dict['night'] = (
-    #             _fit_nocturnal_params(
-    #                 df, Eo, self.get_prior_parameter_estimates())['rb']
-    #             )
-    #     except RuntimeError as e:
-    #         print('Fit of nocturnal rb failed with the following message {}'
-    #               .format(e))
-    #     try:
-    #         self._fit_daytime_rb = True
-    #         results_dict['day'] = (
-    #                 _fit_day_params(
-    #                     df, Eo, self.get_prior_parameter_estimates(),
-    #                     self._fit_daytime_rb)['rb']
-    #                 )
-    #     except RuntimeError as e:
-    #         print('Fit of daytime rb failed with the following message {}'
-    #               .format(e))
-    #     df = df.loc[df.Fsd < noct_threshold]
-    #     fig, ax = plt.subplots(1, 1, figsize = (14, 8))
-    #     fig.patch.set_facecolor('white')
-    #     ax.axhline(0, color = 'black')
-    #     ax.spines['right'].set_visible(False)
-    #     ax.spines['top'].set_visible(False)
-    #     ax.tick_params(axis = 'y', labelsize = 14)
-    #     ax.tick_params(axis = 'x', labelsize = 14)
-    #     # ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
-    #     ax.set_xlabel('$Temperature\/(^oC)$', fontsize = 18)
-    #     ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
-    #     labels_dict = {'night': 'Night Eo and rb', 'day': 'Night Eo, day rb'}
-    #     styles_dict = {'night': '--', 'day': ':'}
-    #     ax.plot(df.TC, df.NEE, color = 'None', marker = 'o',
-    #             mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
-    #             label = 'Observations')
-    #     df['TC_alt'] = np.linspace(df.TC.min(), df.TC.max(), len(df))
-    #     for key in list(results_dict.keys()):
-    #         s = Lloyd_and_Taylor(t_series=df.TC_alt, rb=results_dict[key],
-    #                              Eo=Eo)
-    #         ax.plot(df.TC_alt, s, color = 'black', ls = styles_dict[key],
-    #                 label = labels_dict[key])
-    #     ax.legend(loc = [0.05, 0.8], fontsize = 12)
-    #     return fig
-    # #--------------------------------------------------------------------------
-
-    # #--------------------------------------------------------------------------
-    # def plot_nee(self, date, window_size = 15, Eo = None):
-
-    #     state = self._fit_daytime_rb
-    #     df = self.get_subset(date, size = window_size, mode = 'day')
-    #     assert len(df) > 0
-    #     if not Eo: Eo = self.estimate_Eo()
-    #     results_dict = {}
-    #     try:
-    #         self._fit_daytime_rb = False
-    #         results_dict['night'] = (self._day_params(date, Eo, window_size,
-    #                                   self.prior_parameter_estimates()))
-    #     except RuntimeError as e:
-    #         print('Fit of daytime parameters and nocturnal rb failed with '
-    #               'the following message {}'.format(e))
-    #     try:
-    #         self._fit_daytime_rb = True
-    #         results_dict['day'] = (self._day_params(date, Eo, window_size,
-    #                                 self.prior_parameter_estimates()))
-    #     except RuntimeError as e:
-    #         print('Fit of daytime parameters and rb failed with the '
-    #               'following message {}'.format(e))
-    #     self._fit_daytime_rb = state
-    #     fig, ax = plt.subplots(1, 1, figsize = (14, 8))
-    #     fig.patch.set_facecolor('white')
-    #     ax.axhline(0, color = 'black')
-    #     ax.set_xlim([0, df.PPFD.max() * 1.05])
-    #     ax.spines['right'].set_visible(False)
-    #     ax.spines['top'].set_visible(False)
-    #     ax.tick_params(axis = 'y', labelsize = 14)
-    #     ax.tick_params(axis = 'x', labelsize = 14)
-    #     ax.set_title(dt.datetime.strftime(date, '%Y-%m-%d'), fontsize = 18)
-    #     ax.set_xlabel('$PPFD\/(\mu mol\/photons\/m^{-2}\/s^{-1})$',
-    #                   fontsize = 18)
-    #     ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
-    #     labels_dict = {'night': 'Night Eo and rb', 'day': 'Night Eo, day rb'}
-    #     markers_dict = {'night': '+', 'day': 'x'}
-    #     colors_dict = {'night': 'blue', 'day': 'magenta'}
-    #     ax.plot(df.PPFD, df.NEE, color = 'None', marker = 'o',
-    #             mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
-    #             label = 'Observations')
-    #     for key in list(results_dict.keys()):
-    #         params = results_dict[key]
-    #         s = NEE_model(par_series=df.PPFD, vpd_series=df.VPD,
-    #                         t_series=df.TC, rb = params['rb'],
-    #                         Eo = params['Eo'], alpha = params['alpha'],
-    #                         beta = params['beta'], k = params['k'])
-    #         ax.plot(df.PPFD, s, color = colors_dict[key],
-    #                 marker = markers_dict[key], label = labels_dict[key],
-    #                 ls = 'None')
-    #     ax.legend(loc = [0.05, 0.1], fontsize = 12)
-    #     return fig
-    # #--------------------------------------------------------------------------
