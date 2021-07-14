@@ -10,6 +10,7 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 from lmfit import Model
+import pdb
 
 #------------------------------------------------------------------------------
 # Classes
@@ -37,7 +38,7 @@ class partition():
           temperature, or e.g. [1, 3] would result in the reverse.
     """
     def __init__(self, dataframe, names_dict=None, weights_air_soil='air',
-                 fit_daytime_rb=False, noct_threshold=10):
+                 noct_threshold=10):
 
         self.internal_names = _define_default_internal_names()
         self.external_names = _define_default_external_names(names_dict)
@@ -51,11 +52,20 @@ class partition():
         self.weighting = weights_air_soil
         self.df = make_formatted_df(dataframe, self.variable_map,
                                     self.weighting)
-        self._fit_daytime_rb = fit_daytime_rb
+        self.noct_threshold = noct_threshold
 #------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
     # Methods
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def estimate_daytime_parameters(self, Eo=None, window_size=4,
+                                    window_step=4, fit_daytime_rb=False):
+
+        return self._estimate_parameters(mode='day', window_size=window_size,
+                                         window_step=window_step,
+                                         fit_daytime_rb=fit_daytime_rb)
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -107,7 +117,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_er_time_series(self, params_df=False):
+    def estimate_er_time_series(self, params_df=None):
 
         """Get the complete time series of modelled ecosystem respiration"""
 
@@ -125,7 +135,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_gpp_time_series(self, params_df=False) -> pd.series:
+    def estimate_gpp_time_series(self, params_df=None) -> pd.Series:
 
         """Get the complete time series of modelled gross primary production"""
 
@@ -146,7 +156,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_nee_time_series(self, params_df=False, splice_with_obs=False):
+    def estimate_nee_time_series(self, params_df=None, splice_with_obs=False):
 
         """Get the complete time series of modelled net ecosystem exchange"""
 
@@ -158,7 +168,8 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_parameters(self, mode, Eo=None, window_size=4, window_step=4):
+    def _estimate_parameters(self, mode, window_size, window_step, Eo=None,
+                             fit_daytime_rb=False):
 
         """Get the time series of parameter estimates for the given window
            and step"""
@@ -182,7 +193,7 @@ class partition():
                 if mode == 'day':
                     result = (_fit_day_params(df, Eo, update_priors_dict,
                                               self.noct_threshold,
-                                              self._fit_daytime_rb))
+                                              fit_daytime_rb))
                     update_priors_dict['alpha'] = result['alpha']
                 elif mode == 'night':
                     result = (
@@ -199,14 +210,55 @@ class partition():
         full_date_list = np.unique(self.df.index.date)
         flag = pd.Series(0, index=date_list, name='Fill_flag')
         flag = flag.reindex(pd.date_range(full_date_list[0], full_date_list[-1],
-                                          freq='D'))
-        flag.fillna(1, inplace = True)
+                                          freq='D'), fill_value=1)
         out_df = pd.DataFrame(result_list, index = date_list)
         out_df = out_df.resample('D').interpolate()
         out_df = out_df.reindex(np.unique(self.df.index.date))
         out_df.fillna(method = 'bfill', inplace = True)
         out_df.fillna(method = 'ffill', inplace = True)
         return out_df.join(flag)
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def estimate_nocturnal_parameters(self, Eo=None, window_size=4,
+                                      window_step=4):
+
+        return self._estimate_parameters(mode='night', window_size=window_size,
+                                         window_step=window_step)
+
+        # priors_dict = self.get_prior_parameter_estimates()
+        # if not Eo:
+        #     Eo = self.estimate_Eo()
+        # result_list, date_list = [], []
+        # print('Processing the following dates: ')
+        # date_iterator = self.make_date_iterator(window=window_size,
+        #                                         step=window_step)
+        # for date in date_iterator.index:
+        #     print((date.date()), end=' ')
+        #     df = get_subset(self.df,
+        #                     start=date_iterator.loc[date, 'Start'],
+        #                     end=date_iterator.loc[date, 'End'])
+        #     noct_df = df.loc[df.Fsd < self.noct_threshold]
+        #     if not len(noct_df) > 2:
+        #         print('insufficient data for fit'); continue
+        #     f = Lloyd_and_Taylor
+        #     model = Model(f, independent_vars = ['t_series'])
+        #     params = model.make_params(rb=priors_dict['rb'], Eo=Eo)
+        #     params['Eo'].vary = False
+        #     result = model.fit(noct_df.NEE.to_numpy(), t_series=noct_df.TC.to_numpy(),
+        #                        params=params)
+        #     if result.params['rb'].value < 0:
+        #         print('rb parameter out of range'); continue
+        #     result_list.append(result.best_values)
+        #     date_list.append(date)
+        #     print()
+        # return self._reindex_results(result_list, date_list)
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def get_dates(self):
+
+        return self.df.index.date
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -253,6 +305,22 @@ class partition():
             date_df.loc[this_date, 'End'] = ref_date + dt.timedelta(window / 2.0)
         return date_df
     #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def _reindex_results(self, result_list, date_list):
+
+        full_date_list = np.unique(self.df.index.date)
+        flag = pd.Series(0, index=date_list, name='Fill_flag')
+        flag = flag.reindex(pd.date_range(full_date_list[0], full_date_list[-1],
+                                          freq='D'), fill_value=1)
+        out_df = pd.DataFrame(result_list, index=date_list)
+        out_df = out_df.resample('D').interpolate()
+        out_df = out_df.reindex(np.unique(self.df.index.date))
+        out_df.fillna(method = 'bfill', inplace = True)
+        out_df.fillna(method = 'ffill', inplace = True)
+        return out_df
+    #--------------------------------------------------------------------------
+
 
 #------------------------------------------------------------------------------
 
@@ -302,7 +370,7 @@ def _define_default_internal_names():
 def _define_default_external_names(names_dict=None):
 
     """Map the variable names in the external dataset to generic variable
-       references, and cross-check formatting of dictionary if required"""
+       references, and cross-check formatting of dictionary if passed"""
 
     default_externals = {'Cflux': 'Fc',
                          'air_temperature': 'Ta',
@@ -315,6 +383,17 @@ def _define_default_external_names(names_dict=None):
         return default_externals
     [default_externals[x] for x in names_dict.keys()]
     return names_dict
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def _define_default_fill_flags():
+
+    """Define a schema for status flags in the params_df"""
+
+    return {'All parameters fitted': 0,
+            'All parameters interpolated': 1,
+            'k_fixed_to_default': 2,
+            'alpha_fixed_to_prior_or_default': 3}
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
