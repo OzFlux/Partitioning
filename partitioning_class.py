@@ -63,9 +63,44 @@ class partition():
     def estimate_daytime_parameters(self, Eo=None, window_size=4,
                                     window_step=4, fit_daytime_rb=False):
 
-        return self._estimate_parameters(mode='day', window_size=window_size,
-                                         window_step=window_step,
-                                         fit_daytime_rb=fit_daytime_rb)
+        # return self._estimate_parameters(mode='day', window_size=window_size,
+        #                                  window_step=window_step,
+        #                                  fit_daytime_rb=fit_daytime_rb)
+
+        base_priors_dict = self.get_prior_parameter_estimates()
+        update_priors_dict = base_priors_dict.copy()
+        result_list, date_list = [], []
+        if not Eo:
+            Eo = self.estimate_Eo()
+        if not fit_daytime_rb:
+            rb_df = self.estimate_nocturnal_parameters(Eo=Eo)
+        print('Processing the following dates (day mode): ')
+        date_iterator = self.make_date_iterator(window=window_size,
+                                                step=window_step)
+        for date in date_iterator.index:
+            try:
+                rb = rb_df.loc[date, 'rb']
+            except NameError:
+                rb = None
+            df = get_subset(self.df,
+                            start=date_iterator.loc[date, 'Start'],
+                            end=date_iterator.loc[date, 'End'])
+            print((date.date()), end=' ')
+            try:
+                result = (
+                    _fit_day_params(df, Eo, update_priors_dict,
+                                    self.noct_threshold, rb=rb)
+                    )
+                pdb.set_trace()
+                update_priors_dict['alpha'] = result['alpha']
+                result_list.append(result)
+                date_list.append(date)
+            except RuntimeError as e:
+                update_priors_dict['alpha'] = base_priors_dict['alpha']
+                print('- {}'.format(e))
+                continue
+            print ()
+
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -223,36 +258,26 @@ class partition():
     def estimate_nocturnal_parameters(self, Eo=None, window_size=4,
                                       window_step=4):
 
-        return self._estimate_parameters(mode='night', window_size=window_size,
-                                         window_step=window_step)
-
-        # priors_dict = self.get_prior_parameter_estimates()
-        # if not Eo:
-        #     Eo = self.estimate_Eo()
-        # result_list, date_list = [], []
-        # print('Processing the following dates: ')
-        # date_iterator = self.make_date_iterator(window=window_size,
-        #                                         step=window_step)
-        # for date in date_iterator.index:
-        #     print((date.date()), end=' ')
-        #     df = get_subset(self.df,
-        #                     start=date_iterator.loc[date, 'Start'],
-        #                     end=date_iterator.loc[date, 'End'])
-        #     noct_df = df.loc[df.Fsd < self.noct_threshold]
-        #     if not len(noct_df) > 2:
-        #         print('insufficient data for fit'); continue
-        #     f = Lloyd_and_Taylor
-        #     model = Model(f, independent_vars = ['t_series'])
-        #     params = model.make_params(rb=priors_dict['rb'], Eo=Eo)
-        #     params['Eo'].vary = False
-        #     result = model.fit(noct_df.NEE.to_numpy(), t_series=noct_df.TC.to_numpy(),
-        #                        params=params)
-        #     if result.params['rb'].value < 0:
-        #         print('rb parameter out of range'); continue
-        #     result_list.append(result.best_values)
-        #     date_list.append(date)
-        #     print()
-        # return self._reindex_results(result_list, date_list)
+        priors_dict = self.get_prior_parameter_estimates()
+        if not Eo:
+            Eo = self.estimate_Eo()
+        result_list, date_list = [], []
+        print('Processing the following dates: ')
+        date_iterator = self.make_date_iterator(window=window_size,
+                                                step=window_step)
+        for date in date_iterator.index:
+            print((date.date()), end=' ')
+            df = get_subset(self.df,
+                            start=date_iterator.loc[date, 'Start'],
+                            end=date_iterator.loc[date, 'End'])
+            try:
+                result_list.append(_fit_nocturnal_params(df, Eo, priors_dict,
+                                                         self.noct_threshold))
+                date_list.append(date)
+            except RuntimeError:
+                continue
+            print()
+        return self._reindex_results(result_list, date_list)
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -309,18 +334,17 @@ class partition():
     #--------------------------------------------------------------------------
     def _reindex_results(self, result_list, date_list):
 
-        full_date_list = np.unique(self.df.index.date)
-        flag = pd.Series(0, index=date_list, name='Fill_flag')
-        flag = flag.reindex(pd.date_range(full_date_list[0], full_date_list[-1],
-                                          freq='D'), fill_value=1)
-        out_df = pd.DataFrame(result_list, index=date_list)
-        out_df = out_df.resample('D').interpolate()
-        out_df = out_df.reindex(np.unique(self.df.index.date))
-        out_df.fillna(method = 'bfill', inplace = True)
-        out_df.fillna(method = 'ffill', inplace = True)
-        return out_df
+        full_date_range = pd.date_range(self.df.index[0].date(),
+                                        self.df.index.date[-1],
+                                        freq='D')
+        temp_df = pd.DataFrame(result_list, index=date_list)
+        temp_df = temp_df.reindex(full_date_range)
+        params_df = temp_df[temp_df.columns[:-1]].interpolate()
+        params_df.fillna(method = 'bfill', inplace = True)
+        params_df.fillna(method = 'ffill', inplace = True)
+        flag_df = temp_df[temp_df.columns[-1]].fillna(1)
+        return params_df.join(flag_df)
     #--------------------------------------------------------------------------
-
 
 #------------------------------------------------------------------------------
 
@@ -336,9 +360,7 @@ def _check_weights_format(weighting):
     if not isinstance(weighting, (str, list)):
         raise TypeError('"weighting" kwarg must be either string or list')
     if isinstance(weighting, str):
-        try:
-            assert weighting in ['air', 'soil']
-        except AssertionError:
+        if not weighting in ['air', 'soil']:
             raise TypeError('if str passed for "weighting" kwarg, it must '
                             'be either "air" or "soil"')
     if isinstance(weighting, list):
@@ -396,8 +418,62 @@ def _define_default_fill_flags():
             'alpha_fixed_to_prior_or_default': 3}
 #------------------------------------------------------------------------------
 
+# #------------------------------------------------------------------------------
+# def _fit_day_params(df, Eo, priors_dict, noct_threshold, fit_daytime_rb):
+
+#     """Optimise daytime parameters (rb) for a single data window
+#        (Eo must be passed as kwarg after running estimate_Eo function)"""
+
+#     def model_fit(these_params):
+#         return model.fit(day_df.NEE.to_numpy(),
+#                          par_series=day_df.PPFD.to_numpy(),
+#                          vpd_series=day_df.VPD.to_numpy(),
+#                          t_series=day_df.TC.to_numpy(),
+#                          params=these_params)
+
+#     day_df = df.loc[df.Fsd > noct_threshold]
+#     if fit_daytime_rb:
+#         rb_prior = priors_dict['rb']
+#     else:
+#         rb_prior = _fit_nocturnal_params(df, Eo, priors_dict,
+#                                          noct_threshold)['rb']
+#     beta_prior = priors_dict['beta']
+#     if not len(day_df) > 4:
+#         raise RuntimeError('insufficient data for fit')
+#     f = NEE_model
+#     model = Model(f, independent_vars=['par_series', 'vpd_series', 't_series'])
+#     params = model.make_params(rb=rb_prior, Eo=Eo,
+#                                alpha=priors_dict['alpha'],
+#                                beta=beta_prior,
+#                                k=priors_dict['k'])
+#     rmse_list, params_list = [], []
+#     for this_beta in [beta_prior, beta_prior / 2, beta_prior * 2]:
+#         params['beta'].value = this_beta
+#         params['Eo'].vary = False
+#         params['rb'].vary = fit_daytime_rb
+#         result = model_fit(these_params=params)
+#         if result.params['rb'] < 0:
+#             raise RuntimeError('rb parameter out of range')
+#         if not 0 <= result.params['k'].value <= 10:
+#             params['k'].value = priors_dict['k']
+#             params['k'].vary = False
+#             result = model_fit(these_params = params)
+#         if not -0.22 <= result.params['alpha'].value <= 0:
+#             params['alpha'].value = priors_dict['alpha']
+#             params['alpha'].vary = False
+#             result = model_fit(these_params = params)
+#         if not -100 <= result.params['beta'].value <= 0:
+#             raise RuntimeError('beta parameter out of range')
+#         rmse_list.append(
+#             np.sqrt(((day_df.NEE.to_numpy() - result.best_fit)**2).sum())
+#             )
+#         params_list.append(result.best_values)
+#     idx = rmse_list.index(min(rmse_list))
+#     return params_list[idx]
+# #------------------------------------------------------------------------------
+
 #------------------------------------------------------------------------------
-def _fit_day_params(df, Eo, priors_dict, noct_threshold, fit_daytime_rb):
+def _fit_day_params(df, Eo, priors_dict, noct_threshold=10, rb=None):
 
     """Optimise daytime parameters (rb) for a single data window
        (Eo must be passed as kwarg after running estimate_Eo function)"""
@@ -410,11 +486,12 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold, fit_daytime_rb):
                          params=these_params)
 
     day_df = df.loc[df.Fsd > noct_threshold]
-    if fit_daytime_rb:
-        rb_prior = priors_dict['rb']
+    if rb:
+        rb_prior = rb
+        fit_daytime_rb = False
     else:
-        rb_prior = _fit_nocturnal_params(df, Eo, priors_dict,
-                                         noct_threshold)['rb']
+        rb_prior = priors_dict['rb']
+        fit_daytime_rb = True
     beta_prior = priors_dict['beta']
     if not len(day_df) > 4:
         raise RuntimeError('insufficient data for fit')
@@ -466,7 +543,10 @@ def _fit_nocturnal_params(df, Eo, priors_dict, noct_threshold):
     result = model.fit(noct_df.NEE.to_numpy(), t_series=noct_df.TC.to_numpy(),
                        params=params)
     if result.params['rb'].value < 0:
-        raise RuntimeError('rb parameter out of range')
+        result.best_values['rb'] = np.nan
+        result.best_values.update({'nocturnal_fit_status': 1})
+    else:
+        result.best_values.update({'nocturnal_fit_status': 0})
     return result.best_values
 #------------------------------------------------------------------------------
 
