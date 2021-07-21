@@ -46,14 +46,13 @@ class partition():
         self.variable_map = {self.external_names[key]: self.internal_names[key]
                              for key in self.internal_names}
         _check_weights_format(weights_air_soil)
+        self.weighting = weights_air_soil
         if not isinstance(noct_threshold, (int, float)):
             raise TypeError('Arg "noct_threshold" must be of type int or float')
         self.noct_threshold = noct_threshold
-        self.weighting = weights_air_soil
         self.df = make_formatted_df(dataframe, self.variable_map,
                                     self.weighting)
         self.noct_threshold = noct_threshold
-#------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
     # Methods
@@ -63,17 +62,13 @@ class partition():
     def estimate_daytime_parameters(self, Eo=None, window_size=4,
                                     window_step=4, fit_daytime_rb=False):
 
-        # return self._estimate_parameters(mode='day', window_size=window_size,
-        #                                  window_step=window_step,
-        #                                  fit_daytime_rb=fit_daytime_rb)
-
         base_priors_dict = self.get_prior_parameter_estimates()
         update_priors_dict = base_priors_dict.copy()
         result_list, date_list = [], []
         if not Eo:
             Eo = self.estimate_Eo()
         if not fit_daytime_rb:
-            rb_df = self.estimate_nocturnal_parameters(Eo=Eo)
+            rb_df = self.estimate_night_parameters(Eo=Eo)
         print('Processing the following dates (day mode): ')
         date_iterator = self.make_date_iterator(window=window_size,
                                                 step=window_step)
@@ -86,21 +81,18 @@ class partition():
                             start=date_iterator.loc[date, 'Start'],
                             end=date_iterator.loc[date, 'End'])
             print((date.date()), end=' ')
-            try:
-                result = (
-                    _fit_day_params(df, Eo, update_priors_dict,
-                                    self.noct_threshold, rb=rb)
-                    )
-                pdb.set_trace()
+            result = (
+                _fit_day_params(df, Eo, update_priors_dict,
+                                self.noct_threshold, rb=rb)
+                )
+            if not np.isnan(result['alpha']):
                 update_priors_dict['alpha'] = result['alpha']
-                result_list.append(result)
-                date_list.append(date)
-            except RuntimeError as e:
+            else:
                 update_priors_dict['alpha'] = base_priors_dict['alpha']
-                print('- {}'.format(e))
-                continue
+            result_list.append(result)
+            date_list.append(date)
             print ()
-
+        return self._reindex_results(result_list, date_list)
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -112,6 +104,7 @@ class partition():
         Eo_list = []
         date_iterator = self.make_date_iterator(window=window_size,
                                                 step=window_step)
+        priors_dict = self.get_prior_parameter_estimates()
         for date in date_iterator.index:
             df = get_subset(self.df,
                             start=date_iterator.loc[date, 'Start'],
@@ -124,7 +117,7 @@ class partition():
             f = Lloyd_and_Taylor
             model = Model(f, independent_vars = ['t_series'])
             params = model.make_params(
-                rb = 1, Eo = self.get_prior_parameter_estimates()['Eo']
+                rb = priors_dict['rb'], Eo = priors_dict['Eo']
                 )
             result = model.fit(df.NEE,
                                t_series = df.TC,
@@ -157,7 +150,7 @@ class partition():
         """Get the complete time series of modelled ecosystem respiration"""
 
         if not isinstance(params_df, pd.core.frame.DataFrame):
-            params_df = self.estimate_parameters(mode = 'night')
+            params_df = self.estimate_night_parameters()
         resp_series = pd.Series()
         for date in params_df.index:
             params = params_df.loc[date]
@@ -175,7 +168,7 @@ class partition():
         """Get the complete time series of modelled gross primary production"""
 
         if not isinstance(params_df, pd.core.frame.DataFrame):
-            params_df = self.estimate_parameters(mode='day')
+            params_df = self.estimate_daytime_parameters()
         gpp_series = pd.Series()
         for date in params_df.index:
             params = params_df.loc[date]
@@ -203,59 +196,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def _estimate_parameters(self, mode, window_size, window_step, Eo=None,
-                             fit_daytime_rb=False):
-
-        """Get the time series of parameter estimates for the given window
-           and step"""
-
-        if not mode in ['day', 'night']:
-            raise KeyError('mode parameter must be either "day" or "night"')
-        base_priors_dict = self.get_prior_parameter_estimates()
-        update_priors_dict = base_priors_dict.copy()
-        if not Eo:
-            Eo = self.estimate_Eo()
-        result_list, date_list = [], []
-        print('Processing the following dates ({} mode): '.format(mode))
-        date_iterator = self.make_date_iterator(window=window_size,
-                                                step=window_step)
-        for date in date_iterator.index:
-            df = get_subset(self.df,
-                            start=date_iterator.loc[date, 'Start'],
-                            end=date_iterator.loc[date, 'End'])
-            print((date.date()), end=' ')
-            try:
-                if mode == 'day':
-                    result = (_fit_day_params(df, Eo, update_priors_dict,
-                                              self.noct_threshold,
-                                              fit_daytime_rb))
-                    update_priors_dict['alpha'] = result['alpha']
-                elif mode == 'night':
-                    result = (
-                        _fit_nocturnal_params(df, Eo, update_priors_dict,
-                                              self.noct_threshold)
-                        )
-                result_list.append(result)
-                date_list.append(date)
-                print ()
-            except RuntimeError as e:
-                update_priors_dict['alpha'] = base_priors_dict['alpha']
-                print('- {}'.format(e))
-                continue
-        full_date_list = np.unique(self.df.index.date)
-        flag = pd.Series(0, index=date_list, name='Fill_flag')
-        flag = flag.reindex(pd.date_range(full_date_list[0], full_date_list[-1],
-                                          freq='D'), fill_value=1)
-        out_df = pd.DataFrame(result_list, index = date_list)
-        out_df = out_df.resample('D').interpolate()
-        out_df = out_df.reindex(np.unique(self.df.index.date))
-        out_df.fillna(method = 'bfill', inplace = True)
-        out_df.fillna(method = 'ffill', inplace = True)
-        return out_df.join(flag)
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    def estimate_nocturnal_parameters(self, Eo=None, window_size=4,
+    def estimate_night_parameters(self, Eo=None, window_size=4,
                                       window_step=4):
 
         priors_dict = self.get_prior_parameter_estimates()
@@ -270,20 +211,18 @@ class partition():
             df = get_subset(self.df,
                             start=date_iterator.loc[date, 'Start'],
                             end=date_iterator.loc[date, 'End'])
-            try:
-                result_list.append(_fit_nocturnal_params(df, Eo, priors_dict,
-                                                         self.noct_threshold))
-                date_list.append(date)
-            except RuntimeError:
-                continue
+            result_list.append(_fit_night_params(df, Eo, priors_dict,
+                                                 self.noct_threshold))
+            date_list.append(date)
             print()
         return self._reindex_results(result_list, date_list)
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_dates(self):
+    def get_date_window(self, date, window_size):
 
-        return self.df.index.date
+
+        pass
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -370,8 +309,26 @@ def _check_weights_format(weighting):
                 assert isinstance(x, (int, float))
         except AssertionError:
             raise TypeError('if list passed for weighting kwarg, it must '
-                            'conists of only 2 elements, each of which must '
+                            'consist of only 2 elements, each of which must '
                             'be of type int or float')
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def convert_fault_integer_to_bitmap(fault_integer, as_bin=True):
+
+    """Convert fault integer to bitmap or text"""
+
+    if as_bin: return bin(fault_integer)[2:].zfill(5)
+    fault_dict = define_fault_flags()
+    inverse_dict = dict(zip(fault_dict.values(), fault_dict.keys()))
+    fault_list = []
+    for this_bit in inverse_dict:
+        try:
+            bit_as_int = np.bitwise_and(this_bit, fault_integer)
+            fault_list.append(inverse_dict[bit_as_int])
+        except KeyError:
+            continue
+    return ', '.join(fault_list)
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -386,6 +343,22 @@ def _define_default_internal_names():
             'insolation': 'Fsd',
             'vapour_pressure_deficit': 'VPD',
             'PPFD': 'PPFD'}
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def define_fault_flags(key=None):
+
+    """Define a schema for diagnostic flags in the params_df"""
+
+    def_dict = {'insufficient data for fit': 2**0,
+                'rb out of range': 2**1,
+                'k fixed to default': 2**2,
+                'alpha fixed to prior or default': 2**3,
+                'beta out of range': 2**4}
+
+    if key in def_dict:
+        return def_dict[key]
+    return def_dict
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -408,71 +381,6 @@ def _define_default_external_names(names_dict=None):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _define_default_fill_flags():
-
-    """Define a schema for status flags in the params_df"""
-
-    return {'All parameters fitted': 0,
-            'All parameters interpolated': 1,
-            'k_fixed_to_default': 2,
-            'alpha_fixed_to_prior_or_default': 3}
-#------------------------------------------------------------------------------
-
-# #------------------------------------------------------------------------------
-# def _fit_day_params(df, Eo, priors_dict, noct_threshold, fit_daytime_rb):
-
-#     """Optimise daytime parameters (rb) for a single data window
-#        (Eo must be passed as kwarg after running estimate_Eo function)"""
-
-#     def model_fit(these_params):
-#         return model.fit(day_df.NEE.to_numpy(),
-#                          par_series=day_df.PPFD.to_numpy(),
-#                          vpd_series=day_df.VPD.to_numpy(),
-#                          t_series=day_df.TC.to_numpy(),
-#                          params=these_params)
-
-#     day_df = df.loc[df.Fsd > noct_threshold]
-#     if fit_daytime_rb:
-#         rb_prior = priors_dict['rb']
-#     else:
-#         rb_prior = _fit_nocturnal_params(df, Eo, priors_dict,
-#                                          noct_threshold)['rb']
-#     beta_prior = priors_dict['beta']
-#     if not len(day_df) > 4:
-#         raise RuntimeError('insufficient data for fit')
-#     f = NEE_model
-#     model = Model(f, independent_vars=['par_series', 'vpd_series', 't_series'])
-#     params = model.make_params(rb=rb_prior, Eo=Eo,
-#                                alpha=priors_dict['alpha'],
-#                                beta=beta_prior,
-#                                k=priors_dict['k'])
-#     rmse_list, params_list = [], []
-#     for this_beta in [beta_prior, beta_prior / 2, beta_prior * 2]:
-#         params['beta'].value = this_beta
-#         params['Eo'].vary = False
-#         params['rb'].vary = fit_daytime_rb
-#         result = model_fit(these_params=params)
-#         if result.params['rb'] < 0:
-#             raise RuntimeError('rb parameter out of range')
-#         if not 0 <= result.params['k'].value <= 10:
-#             params['k'].value = priors_dict['k']
-#             params['k'].vary = False
-#             result = model_fit(these_params = params)
-#         if not -0.22 <= result.params['alpha'].value <= 0:
-#             params['alpha'].value = priors_dict['alpha']
-#             params['alpha'].vary = False
-#             result = model_fit(these_params = params)
-#         if not -100 <= result.params['beta'].value <= 0:
-#             raise RuntimeError('beta parameter out of range')
-#         rmse_list.append(
-#             np.sqrt(((day_df.NEE.to_numpy() - result.best_fit)**2).sum())
-#             )
-#         params_list.append(result.best_values)
-#     idx = rmse_list.index(min(rmse_list))
-#     return params_list[idx]
-# #------------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
 def _fit_day_params(df, Eo, priors_dict, noct_threshold=10, rb=None):
 
     """Optimise daytime parameters (rb) for a single data window
@@ -485,6 +393,8 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold=10, rb=None):
                          t_series=day_df.TC.to_numpy(),
                          params=these_params)
 
+    fail_dict = {'rb': np.nan, 'Eo': Eo, 'alpha': np.nan, 'beta': np.nan,
+                 'k': np.nan}
     day_df = df.loc[df.Fsd > noct_threshold]
     if rb:
         rb_prior = rb
@@ -494,7 +404,10 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold=10, rb=None):
         fit_daytime_rb = True
     beta_prior = priors_dict['beta']
     if not len(day_df) > 4:
-        raise RuntimeError('insufficient data for fit')
+        fail_dict.update(
+            {'day_fault_flag': define_fault_flags('insufficient data for fit')}
+                )
+        return fail_dict
     f = NEE_model
     model = Model(f, independent_vars=['par_series', 'vpd_series', 't_series'])
     params = model.make_params(rb=rb_prior, Eo=Eo,
@@ -506,47 +419,61 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold=10, rb=None):
         params['beta'].value = this_beta
         params['Eo'].vary = False
         params['rb'].vary = fit_daytime_rb
+        fault_flag = 0
         result = model_fit(these_params=params)
         if result.params['rb'] < 0:
-            raise RuntimeError('rb parameter out of range')
+            fault_flag = define_fault_flags('rb out of range')
+            continue
         if not 0 <= result.params['k'].value <= 10:
             params['k'].value = priors_dict['k']
             params['k'].vary = False
-            result = model_fit(these_params = params)
+            result = model_fit(these_params=params)
+            fault_flag += define_fault_flags('k fixed to default')
         if not -0.22 <= result.params['alpha'].value <= 0:
             params['alpha'].value = priors_dict['alpha']
             params['alpha'].vary = False
-            result = model_fit(these_params = params)
+            result = model_fit(these_params=params)
+            fault_flag += define_fault_flags('alpha fixed to prior or default')
         if not -100 <= result.params['beta'].value <= 0:
-            raise RuntimeError('beta parameter out of range')
+            fault_flag += 16
+            continue
         rmse_list.append(
             np.sqrt(((day_df.NEE.to_numpy() - result.best_fit)**2).sum())
             )
+        result.best_values.update({'day_fault_flag': fault_flag})
         params_list.append(result.best_values)
+    if not rmse_list:
+        fail_dict.update({'day_fault_flag': fault_flag})
+        return fail_dict
     idx = rmse_list.index(min(rmse_list))
     return params_list[idx]
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _fit_nocturnal_params(df, Eo, priors_dict, noct_threshold):
+def _fit_night_params(df, Eo, priors_dict, noct_threshold=10):
 
     """Optimise nocturnal parameters (rb) for a single data window
        (Eo must be passed as kwarg after running estimate_Eo function)"""
 
+    fail_dict = {'rb': np.nan, 'Eo': Eo}
     noct_df = df.loc[df.Fsd < noct_threshold]
     if not len(noct_df) > 2:
-        raise RuntimeError('insufficient data for fit')
-    f = Lloyd_and_Taylor
-    model = Model(f, independent_vars = ['t_series'])
+        fail_dict.update(
+            {'day_fault_flag': define_fault_flags('insufficient data for fit')}
+            )
+        return fail_dict
+    model = Model(Lloyd_and_Taylor, independent_vars=['t_series'])
     params = model.make_params(rb=priors_dict['rb'], Eo=Eo)
     params['Eo'].vary = False
-    result = model.fit(noct_df.NEE.to_numpy(), t_series=noct_df.TC.to_numpy(),
-                       params=params)
+    result = model.fit(
+        noct_df.NEE.to_numpy(), t_series=noct_df.TC.to_numpy(), params=params
+        )
     if result.params['rb'].value < 0:
-        result.best_values['rb'] = np.nan
-        result.best_values.update({'nocturnal_fit_status': 1})
-    else:
-        result.best_values.update({'nocturnal_fit_status': 0})
+        fail_dict.update(
+            {'night_fault_flag': define_fault_flags('rb out of range')}
+            )
+        return fail_dict
+    result.best_values.update({'night_fault_flag': 0})
     return result.best_values
 #------------------------------------------------------------------------------
 
