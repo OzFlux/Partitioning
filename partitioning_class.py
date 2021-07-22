@@ -7,6 +7,7 @@ Created on Thu Mar 15 13:53:16 2018
 """
 
 import datetime as dt
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from lmfit import Model
@@ -75,8 +76,7 @@ class partition():
                 rb = rb_df.loc[date, 'rb']
             except NameError:
                 rb = None
-            df = self.get_data_window(date=date, window=window_size,
-                                      return_valid_data=True)
+            df = self.get_data_window(date=date, window=window_size)
             print((date.date()), end=' ')
             result = (
                 _fit_day_params(df, Eo, update_priors_dict,
@@ -101,8 +101,7 @@ class partition():
         Eo_list = []
         priors_dict = self.get_prior_parameter_estimates()
         for date in self.get_date_steps(step=window_step, window=window_size):
-            df = self.get_data_window(date=date, window=window_size,
-                                      return_valid_data=True)
+            df = self.get_data_window(date=date, window=window_size)
             df = df.loc[df.Fsd < self.noct_threshold]
             if not len(df) > 6:
                 continue
@@ -200,19 +199,58 @@ class partition():
         print('Processing the following dates: ')
         for date in self.get_date_steps(step=window_step, window=window_size):
             print((date.date()), end=' ')
-            df = self.get_data_window(date=date, window=window_size,
-                                      return_valid_data=True)
-            result_list.append(_fit_night_params(df, Eo, priors_dict,
-                                                 self.noct_threshold))
+            result_list.append(
+                self.fit_night_data_window(date=date, window=window_size,
+                                           Eo=Eo, priors_dict=priors_dict)
+                )
             date_list.append(date)
             print()
         return self._reindex_results(result_list, date_list)
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
+    def fit_day_data_window(self, date, window, priors_dict=None, Eo=None,
+                            fit_daytime_rb=False):
+
+        """Get the daytime parameter fit for a specific date and window"""
+
+        if not priors_dict:
+            priors_dict = self.get_prior_parameter_estimates()
+        if not Eo:
+            Eo = self.estimate_Eo()
+        df = self.get_data_window(date=date, window=window)
+        if not fit_daytime_rb:
+            noct_params = (
+                _fit_night_params(df, Eo, priors_dict, self.noct_threshold)
+                )
+            if noct_params['rb'] == np.nan:
+                noct_params['day_fault_flag'] = (
+                    noct_params.pop('night_fault_flag')
+                    )
+                return noct_params
+            rb=noct_params['rb']
+        else:
+            rb=None
+        return _fit_day_params(df, Eo, priors_dict, self.noct_threshold,rb=rb)
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def fit_night_data_window(self, date, window, priors_dict=None, Eo=None):
+
+        """Get the nocturnal parameter fit for a specific date and window"""
+
+        if not priors_dict:
+            priors_dict = self.get_prior_parameter_estimates()
+        if not Eo:
+            Eo = self.estimate_Eo()
+        df = self.get_data_window(date=date, window=window)
+        return _fit_night_params(df, Eo, priors_dict, self.noct_threshold)
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
     def get_date_steps(self, step, window) -> np.ndarray:
 
-        """Get the stepped date index on which the fit functions iterate"""
+        """Get the stepped date index over which the fit function iterates"""
 
         start, end = self.df.index[0], self.df.index[-1]
         start_date = start.to_pydatetime().date() + dt.timedelta(window / 2)
@@ -224,7 +262,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_data_window(self, date, window, dates_only=True) -> dict:
+    def get_data_window(self, date, window, dates_only=False) -> dict:
 
         """Get the relevant date range centred on a given date for a given
            window (in days); if not dates_only, get the (fit-relevant)
@@ -239,7 +277,7 @@ class partition():
         ref_date = dt.datetime.combine(date, dt.time(12))
         start = ref_date - dt.timedelta(window / 2.0 - self.interval / 1440.0)
         end = ref_date + dt.timedelta(window / 2.0)
-        if not dates_only:
+        if dates_only:
             return start, end
         return (
             self.df.loc[start: end, ['NEE', 'PPFD', 'TC', 'VPD', 'Fsd']]
@@ -266,9 +304,43 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def plot_data_window():
+    def plot_er(self, date, window, Eo=None, fit_daytime_rb=False):
 
-        pass
+        if not fit_daytime_rb:
+            params_dict = (
+                self.fit_night_data_window(date=date, window=window, Eo=Eo)
+                )
+        else:
+            params_dict = (
+                self.fit_day_data_window(date=date, window=window, Eo=Eo,
+                                         fit_daytime_rb=fit_daytime_rb)
+                )
+        if np.isnan(params_dict['rb']):
+            print('Fitting failed with the following error: {}'
+                  .format(convert_fault_integer_to_bitmap(as_bin=False)))
+            return
+        df = self.get_data_window(date=date, window=window)
+        df = df.loc[df.Fsd < self.noct_threshold]
+        fig, ax = plt.subplots(1, 1, figsize = (14, 8))
+        fig.patch.set_facecolor('white')
+        ax.axhline(0, color = 'black')
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.tick_params(axis = 'y', labelsize = 14)
+        ax.tick_params(axis = 'x', labelsize = 14)
+        ax.set_title(date, fontsize = 18)
+        ax.set_xlabel('$Temperature\/(^oC)$', fontsize = 18)
+        ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
+        ax.plot(df.TC, df.NEE, color = 'None', marker = 'o',
+                mfc = 'grey', mec = 'black', ms = 8, alpha = 0.5,
+                label = 'Observations')
+        df['TC_alt'] = np.linspace(df.TC.min(), df.TC.max(), len(df))
+        synth_series = Lloyd_and_Taylor(t_series=df.TC_alt,
+                                        rb=params_dict['rb'],
+                                        Eo=params_dict['Eo'])
+        ax.plot(df.TC_alt, synth_series, color = 'black', label='Model')
+        ax.legend(loc = [0.05, 0.8], fontsize = 12)
+        return fig
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -333,6 +405,25 @@ def convert_fault_integer_to_bitmap(fault_integer, as_bin=True):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+def _define_default_external_names(names_dict=None):
+
+    """Map the variable names in the external dataset to generic variable
+       references, and cross-check formatting of dictionary if passed"""
+
+    default_externals = {'Cflux': 'Fc',
+                         'air_temperature': 'Ta',
+                         'soil_temperature': 'Ts',
+                         'insolation': 'Fsd',
+                         'vapour_pressure_deficit': 'VPD',
+                         'PPFD': None}
+
+    if not names_dict:
+        return default_externals
+    [default_externals[x] for x in names_dict.keys()]
+    return names_dict
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 def _define_default_internal_names():
 
     """Map the variable names in the internal dataset to generic variable
@@ -360,25 +451,6 @@ def define_fault_flags(key=None):
     if key in def_dict:
         return def_dict[key]
     return def_dict
-#------------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
-def _define_default_external_names(names_dict=None):
-
-    """Map the variable names in the external dataset to generic variable
-       references, and cross-check formatting of dictionary if passed"""
-
-    default_externals = {'Cflux': 'Fc',
-                         'air_temperature': 'Ta',
-                         'soil_temperature': 'Ts',
-                         'insolation': 'Fsd',
-                         'vapour_pressure_deficit': 'VPD',
-                         'PPFD': None}
-
-    if not names_dict:
-        return default_externals
-    [default_externals[x] for x in names_dict.keys()]
-    return names_dict
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
