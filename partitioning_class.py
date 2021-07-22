@@ -368,9 +368,8 @@ class partition():
         ax.set_xlabel('$PPFD\/(\mu mol\/photons\/m^{-2}\/s^{-1})$',
                       fontsize = 18)
         ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
-        ax.plot(df.PPFD, df.NEE, color='None', marker='o',
-                mfc='grey', mec='black', ms=8, alpha=0.5,
-                label='Observations')
+        im=ax.scatter(df.PPFD, df.NEE, marker='o', s=80, c=df.VPD, alpha=0.5,
+                   label='Observations')
         df['PPFD_alt'] = np.linspace(0, df.PPFD.max(), len(df))
         synth_series = (
             NEE_model(par_series=df.PPFD, vpd_series=df.VPD,
@@ -378,13 +377,13 @@ class partition():
                       Eo=params_dict['Eo'], alpha=params_dict['alpha'],
                       beta=params_dict['beta'], k=params_dict['k'])
             )
-        ax.plot(df.PPFD, synth_series, color = 'None', marker = 'o',
-                mfc = 'blue', mec = 'black', ms = 8, alpha = 0.5,
-                label='Model')
+        ax.plot(df.PPFD, synth_series, color='None', marker='+',
+                mec='black', ms=8, alpha=0.5, label='Model')
         ax.legend(loc=[0.05, 0.1], fontsize=12)
         ax.text(0.5, 0.95, error_str, horizontalalignment='center',
                 verticalalignment='center', transform=ax.transAxes,
                 fontsize=12)
+        fig.colorbar(im, ax=ax)
         return fig
     # #--------------------------------------------------------------------------
 
