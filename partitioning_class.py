@@ -59,8 +59,8 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_daytime_parameters(self, Eo=None, window_size=4,
-                                    window_step=4, fit_daytime_rb=False):
+    def estimate_day_parameters(self, Eo=None, window_size=4, window_step=4,
+                                fit_daytime_rb=False) -> pd.DataFrame:
 
         base_priors_dict = self.get_prior_parameter_estimates()
         update_priors_dict = base_priors_dict.copy()
@@ -70,16 +70,13 @@ class partition():
         if not fit_daytime_rb:
             rb_df = self.estimate_night_parameters(Eo=Eo)
         print('Processing the following dates (day mode): ')
-        date_iterator = self.make_date_iterator(window=window_size,
-                                                step=window_step)
-        for date in date_iterator.index:
+        for date in self.get_date_steps(step=window_step, window=window_size):
             try:
                 rb = rb_df.loc[date, 'rb']
             except NameError:
                 rb = None
-            df = get_subset(self.df,
-                            start=date_iterator.loc[date, 'Start'],
-                            end=date_iterator.loc[date, 'End'])
+            df = self.get_data_window(date=date, window=window_size,
+                                      return_valid_data=True)
             print((date.date()), end=' ')
             result = (
                 _fit_day_params(df, Eo, update_priors_dict,
@@ -102,13 +99,10 @@ class partition():
            style equation using nocturnal data"""
 
         Eo_list = []
-        date_iterator = self.make_date_iterator(window=window_size,
-                                                step=window_step)
         priors_dict = self.get_prior_parameter_estimates()
-        for date in date_iterator.index:
-            df = get_subset(self.df,
-                            start=date_iterator.loc[date, 'Start'],
-                            end=date_iterator.loc[date, 'End'])
+        for date in self.get_date_steps(step=window_step, window=window_size):
+            df = self.get_data_window(date=date, window=window_size,
+                                      return_valid_data=True)
             df = df.loc[df.Fsd < self.noct_threshold]
             if not len(df) > 6:
                 continue
@@ -168,7 +162,7 @@ class partition():
         """Get the complete time series of modelled gross primary production"""
 
         if not isinstance(params_df, pd.core.frame.DataFrame):
-            params_df = self.estimate_daytime_parameters()
+            params_df = self.estimate_day_parameters()
         gpp_series = pd.Series()
         for date in params_df.index:
             params = params_df.loc[date]
@@ -204,13 +198,10 @@ class partition():
             Eo = self.estimate_Eo()
         result_list, date_list = [], []
         print('Processing the following dates: ')
-        date_iterator = self.make_date_iterator(window=window_size,
-                                                step=window_step)
-        for date in date_iterator.index:
+        for date in self.get_date_steps(step=window_step, window=window_size):
             print((date.date()), end=' ')
-            df = get_subset(self.df,
-                            start=date_iterator.loc[date, 'Start'],
-                            end=date_iterator.loc[date, 'End'])
+            df = self.get_data_window(date=date, window=window_size,
+                                      return_valid_data=True)
             result_list.append(_fit_night_params(df, Eo, priors_dict,
                                                  self.noct_threshold))
             date_list.append(date)
@@ -219,14 +210,45 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_date_window(self, date, window_size):
+    def get_date_steps(self, step, window) -> np.ndarray:
 
+        """Get the stepped date index on which the fit functions iterate"""
 
-        pass
+        start, end = self.df.index[0], self.df.index[-1]
+        start_date = start.to_pydatetime().date() + dt.timedelta(window / 2)
+        end_date = end.to_pydatetime().date() - dt.timedelta(window / 2)
+        return (
+            pd.date_range(start_date, end_date, freq='{}D'.format(str(step)))
+            .to_pydatetime()
+            )
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_prior_parameter_estimates(self):
+    def get_data_window(self, date, window, dates_only=True) -> dict:
+
+        """Get the relevant date range centred on a given date for a given
+           window (in days); if not dates_only, get the (fit-relevant)
+           data itself"""
+
+        if not isinstance(date, dt.date):
+            if not isinstance(date, str):
+                raise TypeError('Format must be either python date or str')
+            date = dt.datetime.strptime(date, '%Y-%m-%d').date()
+        if not self.df.index[0] <= date <= self.df.index[-1]:
+            raise RuntimeError('Date outside range of available data')
+        ref_date = dt.datetime.combine(date, dt.time(12))
+        start = ref_date - dt.timedelta(window / 2.0 - self.interval / 1440.0)
+        end = ref_date + dt.timedelta(window / 2.0)
+        if not dates_only:
+            return start, end
+        return (
+            self.df.loc[start: end, ['NEE', 'PPFD', 'TC', 'VPD', 'Fsd']]
+            .dropna()
+            )
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def get_prior_parameter_estimates(self) -> dict:
 
         """Get dictionary with prior parameter estimates for initialisation"""
 
@@ -244,30 +266,9 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def make_date_iterator(self, window, step):
+    def plot_data_window():
 
-        """Create a reference dataframe containing the requisite date steps and
-           corresponding window start and end"""
-
-        start, end = self.df.index[0], self.df.index[-1]
-        start_date = (
-            start.to_pydatetime().date() + dt.timedelta(window / 2)
-            )
-        end_date = (
-            end.to_pydatetime().date() - dt.timedelta(window / 2)
-            )
-        date_df = (
-            pd.DataFrame(index=pd.date_range(start_date, end_date,
-                                             freq = '{}D'.format(str(step))),
-                         columns=['Start', 'End'])
-            )
-        for this_date in date_df.index:
-            ref_date = this_date + dt.timedelta(0.5)
-            date_df.loc[this_date, 'Start'] = (
-                ref_date - dt.timedelta(window / 2.0 - self.interval / 1440.0)
-                )
-            date_df.loc[this_date, 'End'] = ref_date + dt.timedelta(window / 2.0)
-        return date_df
+        pass
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -459,7 +460,8 @@ def _fit_night_params(df, Eo, priors_dict, noct_threshold=10):
     noct_df = df.loc[df.Fsd < noct_threshold]
     if not len(noct_df) > 2:
         fail_dict.update(
-            {'day_fault_flag': define_fault_flags('insufficient data for fit')}
+            {'night_fault_flag':
+             define_fault_flags('insufficient data for fit')}
             )
         return fail_dict
     model = Model(Lloyd_and_Taylor, independent_vars=['t_series'])
@@ -489,14 +491,6 @@ def _check_continuity(index):
             'Unrecognised or non-continuous dataframe DateTime index'
             )
     return freq_dict[interval]
-#------------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
-def get_subset(df, start, end):
-
-    """Get the data subset from the complete dataset"""
-
-    return df.loc[start: end, ['NEE', 'PPFD', 'TC', 'VPD', 'Fsd']].dropna()
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
