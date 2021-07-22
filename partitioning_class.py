@@ -59,39 +59,6 @@ class partition():
     # Methods
     #--------------------------------------------------------------------------
 
-    # #--------------------------------------------------------------------------
-    # def estimate_day_parameters(self, Eo=None, window_size=4, window_step=4,
-    #                             fit_daytime_rb=False) -> pd.DataFrame:
-
-    #     base_priors_dict = self.get_prior_parameter_estimates()
-    #     update_priors_dict = base_priors_dict.copy()
-    #     result_list, date_list = [], []
-    #     if not Eo:
-    #         Eo = self.estimate_Eo()
-    #     if not fit_daytime_rb:
-    #         rb_df = self.estimate_night_parameters(Eo=Eo)
-    #     print('Processing the following dates (day mode): ')
-    #     for date in self.get_date_steps(step=window_step, window=window_size):
-    #         try:
-    #             rb = rb_df.loc[date, 'rb']
-    #         except NameError:
-    #             rb = None
-    #         df = self.get_data_window(date=date, window=window_size)
-    #         print((date.date()), end=' ')
-    #         result = (
-    #             _fit_day_params(df, Eo, update_priors_dict,
-    #                             self.noct_threshold, rb=rb)
-    #             )
-    #         if not np.isnan(result['alpha']):
-    #             update_priors_dict['alpha'] = result['alpha']
-    #         else:
-    #             update_priors_dict['alpha'] = base_priors_dict['alpha']
-    #         result_list.append(result)
-    #         date_list.append(date)
-    #         print ()
-    #     return self._reindex_results(result_list, date_list)
-    # #--------------------------------------------------------------------------
-
     #--------------------------------------------------------------------------
     def estimate_day_parameters(self, Eo=None, window_size=4, window_step=4,
                                 fit_daytime_rb=False) -> pd.DataFrame:
@@ -110,10 +77,10 @@ class partition():
                     priors_dict=update_priors_dict,
                     fit_daytime_rb=fit_daytime_rb)
                 )
-            if not np.isnan(result['alpha']):
-                update_priors_dict['alpha'] = result['alpha']
-            else:
+            if convert_fault_integer_to_bitmap(result['fault_flag'])[1]:
                 update_priors_dict['alpha'] = base_priors_dict['alpha']
+            else:
+                update_priors_dict['alpha'] = result['alpha']
             result_list.append(result)
             date_list.append(date)
             print ()
@@ -251,10 +218,7 @@ class partition():
             noct_params = (
                 _fit_night_params(df, Eo, priors_dict, self.noct_threshold)
                 )
-            if noct_params['rb'] == np.nan:
-                noct_params['day_fault_flag'] = (
-                    noct_params.pop('night_fault_flag')
-                    )
+            if convert_fault_integer_to_bitmap(noct_params['fault_flag'])[1]:
                 return noct_params
             rb=noct_params['rb']
         else:
@@ -332,7 +296,7 @@ class partition():
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def plot_er(self, date, window, Eo=None, fit_daytime_rb=False):
+    def plot_er(self, date, window=15, Eo=None, fit_daytime_rb=False):
 
         if not fit_daytime_rb:
             params_dict = (
@@ -343,9 +307,12 @@ class partition():
                 self.fit_day_data_window(date=date, window=window, Eo=Eo,
                                          fit_daytime_rb=fit_daytime_rb)
                 )
-        if np.isnan(params_dict['rb']):
+        error_state, fatal = convert_fault_integer_to_bitmap(
+                fault_integer=params_dict['fault_flag'], as_bin=False
+                )
+        if fatal:
             print('Fitting failed with the following error: {}'
-                  .format(convert_fault_integer_to_bitmap(as_bin=False)))
+                  .format(error_state))
             return
         df = self.get_data_window(date=date, window=window)
         df = df.loc[df.Fsd < self.noct_threshold]
@@ -370,6 +337,56 @@ class partition():
         ax.legend(loc = [0.05, 0.8], fontsize = 12)
         return fig
     #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def plot_nee(self, date, window=15, Eo=None, fit_daytime_rb=False):
+
+        params_dict = (
+            self.fit_day_data_window(date=date, window=window, Eo=Eo,
+                                     fit_daytime_rb=fit_daytime_rb)
+            )
+        error_state, fatal = convert_fault_integer_to_bitmap(
+                fault_integer=params_dict['fault_flag'], as_bin=False
+                )
+        if fatal:
+            print('Fitting failed with the following error: {}'
+                  .format(error_state))
+            return
+        error_str = error_state if error_state else 'none'
+        error_str = 'Diagnostic state: {}'.format(error_str)
+        df = self.get_data_window(date=date, window=window)
+        df = df.loc[df.Fsd > self.noct_threshold]
+        fig, ax = plt.subplots(1, 1, figsize = (14, 8))
+        fig.patch.set_facecolor('white')
+        ax.axhline(0, color='black', lw=0.5)
+        ax.set_xlim([0, df.PPFD.max() * 1.05])
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.tick_params(axis = 'y', labelsize = 14)
+        ax.tick_params(axis = 'x', labelsize = 14)
+        ax.set_title(date, fontsize = 18)
+        ax.set_xlabel('$PPFD\/(\mu mol\/photons\/m^{-2}\/s^{-1})$',
+                      fontsize = 18)
+        ax.set_ylabel('$NEE\/(\mu molC\/m^{-2}\/s^{-1})$', fontsize = 18)
+        ax.plot(df.PPFD, df.NEE, color='None', marker='o',
+                mfc='grey', mec='black', ms=8, alpha=0.5,
+                label='Observations')
+        df['PPFD_alt'] = np.linspace(0, df.PPFD.max(), len(df))
+        synth_series = (
+            NEE_model(par_series=df.PPFD, vpd_series=df.VPD,
+                      t_series=df.TC, rb = params_dict['rb'],
+                      Eo=params_dict['Eo'], alpha=params_dict['alpha'],
+                      beta=params_dict['beta'], k=params_dict['k'])
+            )
+        ax.plot(df.PPFD, synth_series, color = 'None', marker = 'o',
+                mfc = 'blue', mec = 'black', ms = 8, alpha = 0.5,
+                label='Model')
+        ax.legend(loc=[0.05, 0.1], fontsize=12)
+        ax.text(0.5, 0.95, error_str, horizontalalignment='center',
+                verticalalignment='center', transform=ax.transAxes,
+                fontsize=12)
+        return fig
+    # #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
     def _reindex_results(self, result_list, date_list):
@@ -419,7 +436,8 @@ def convert_fault_integer_to_bitmap(fault_integer, as_bin=True):
 
     """Convert fault integer to bitmap or text"""
 
-    if as_bin: return bin(fault_integer)[2:].zfill(5)
+    fatal = True if np.bitwise_and(fault_integer, 7) else False
+    if as_bin: return bin(fault_integer)[2:].zfill(5), fatal
     fault_dict = define_fault_flags()
     inverse_dict = dict(zip(fault_dict.values(), fault_dict.keys()))
     fault_list = []
@@ -429,7 +447,7 @@ def convert_fault_integer_to_bitmap(fault_integer, as_bin=True):
             fault_list.append(inverse_dict[bit_as_int])
         except KeyError:
             continue
-    return ', '.join(fault_list)
+    return ', '.join(fault_list), fatal
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -472,9 +490,9 @@ def define_fault_flags(key=None):
 
     def_dict = {'insufficient data for fit': 2**0,
                 'rb out of range': 2**1,
-                'k fixed to default': 2**2,
-                'alpha fixed to prior or default': 2**3,
-                'beta out of range': 2**4}
+                'beta out of range': 2**2,
+                'k fixed to default': 2**3,
+                'alpha fixed to prior or default': 2**4}
 
     if key in def_dict:
         return def_dict[key]
@@ -506,8 +524,8 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold=10, rb=None):
     beta_prior = priors_dict['beta']
     if not len(day_df) > 4:
         fail_dict.update(
-            {'day_fault_flag': define_fault_flags('insufficient data for fit')}
-                )
+            {'fault_flag': define_fault_flags('insufficient data for fit')}
+            )
         return fail_dict
     f = NEE_model
     model = Model(f, independent_vars=['par_series', 'vpd_series', 't_series'])
@@ -536,15 +554,15 @@ def _fit_day_params(df, Eo, priors_dict, noct_threshold=10, rb=None):
             result = model_fit(these_params=params)
             fault_flag += define_fault_flags('alpha fixed to prior or default')
         if not -100 <= result.params['beta'].value <= 0:
-            fault_flag += 16
+            fault_flag += define_fault_flags('beta out of range')
             continue
         rmse_list.append(
             np.sqrt(((day_df.NEE.to_numpy() - result.best_fit)**2).sum())
             )
-        result.best_values.update({'day_fault_flag': fault_flag})
+        result.best_values.update({'fault_flag': fault_flag})
         params_list.append(result.best_values)
     if not rmse_list:
-        fail_dict.update({'day_fault_flag': fault_flag})
+        fail_dict.update({'fault_flag': fault_flag})
         return fail_dict
     idx = rmse_list.index(min(rmse_list))
     return params_list[idx]
@@ -560,7 +578,7 @@ def _fit_night_params(df, Eo, priors_dict, noct_threshold=10):
     noct_df = df.loc[df.Fsd < noct_threshold]
     if not len(noct_df) > 2:
         fail_dict.update(
-            {'night_fault_flag':
+            {'fault_flag':
              define_fault_flags('insufficient data for fit')}
             )
         return fail_dict
@@ -572,10 +590,10 @@ def _fit_night_params(df, Eo, priors_dict, noct_threshold=10):
         )
     if result.params['rb'].value < 0:
         fail_dict.update(
-            {'night_fault_flag': define_fault_flags('rb out of range')}
+            {'fault_flag': define_fault_flags('rb out of range')}
             )
         return fail_dict
-    result.best_values.update({'night_fault_flag': 0})
+    result.best_values.update({'fault_flag': 0})
     return result.best_values
 #------------------------------------------------------------------------------
 
