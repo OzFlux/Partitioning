@@ -59,28 +59,56 @@ class partition():
     # Methods
     #--------------------------------------------------------------------------
 
+    # #--------------------------------------------------------------------------
+    # def estimate_day_parameters(self, Eo=None, window_size=4, window_step=4,
+    #                             fit_daytime_rb=False) -> pd.DataFrame:
+
+    #     base_priors_dict = self.get_prior_parameter_estimates()
+    #     update_priors_dict = base_priors_dict.copy()
+    #     result_list, date_list = [], []
+    #     if not Eo:
+    #         Eo = self.estimate_Eo()
+    #     if not fit_daytime_rb:
+    #         rb_df = self.estimate_night_parameters(Eo=Eo)
+    #     print('Processing the following dates (day mode): ')
+    #     for date in self.get_date_steps(step=window_step, window=window_size):
+    #         try:
+    #             rb = rb_df.loc[date, 'rb']
+    #         except NameError:
+    #             rb = None
+    #         df = self.get_data_window(date=date, window=window_size)
+    #         print((date.date()), end=' ')
+    #         result = (
+    #             _fit_day_params(df, Eo, update_priors_dict,
+    #                             self.noct_threshold, rb=rb)
+    #             )
+    #         if not np.isnan(result['alpha']):
+    #             update_priors_dict['alpha'] = result['alpha']
+    #         else:
+    #             update_priors_dict['alpha'] = base_priors_dict['alpha']
+    #         result_list.append(result)
+    #         date_list.append(date)
+    #         print ()
+    #     return self._reindex_results(result_list, date_list)
+    # #--------------------------------------------------------------------------
+
     #--------------------------------------------------------------------------
     def estimate_day_parameters(self, Eo=None, window_size=4, window_step=4,
                                 fit_daytime_rb=False) -> pd.DataFrame:
 
         base_priors_dict = self.get_prior_parameter_estimates()
         update_priors_dict = base_priors_dict.copy()
-        result_list, date_list = [], []
         if not Eo:
             Eo = self.estimate_Eo()
-        if not fit_daytime_rb:
-            rb_df = self.estimate_night_parameters(Eo=Eo)
+        result_list, date_list = [], []
         print('Processing the following dates (day mode): ')
         for date in self.get_date_steps(step=window_step, window=window_size):
-            try:
-                rb = rb_df.loc[date, 'rb']
-            except NameError:
-                rb = None
-            df = self.get_data_window(date=date, window=window_size)
             print((date.date()), end=' ')
             result = (
-                _fit_day_params(df, Eo, update_priors_dict,
-                                self.noct_threshold, rb=rb)
+                self.fit_day_data_window(
+                    date=date, window=window_size, Eo=Eo,
+                    priors_dict=update_priors_dict,
+                    fit_daytime_rb=fit_daytime_rb)
                 )
             if not np.isnan(result['alpha']):
                 update_priors_dict['alpha'] = result['alpha']
